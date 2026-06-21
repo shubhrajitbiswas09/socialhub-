@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.alpha
@@ -46,6 +47,136 @@ import com.example.data.*
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+
+class BubbleAnimState(
+    val startX: Float,
+    val startY: Float,
+    val targetX: Float,
+    val targetY: Float,
+    val radiusSecive: androidx.compose.ui.unit.Dp,
+    val delay: Int
+) {
+    var currentX by mutableStateOf(0f)
+    var currentY by mutableStateOf(0f)
+    var alpha by mutableStateOf(0f)
+    var currentRadius by mutableStateOf(radiusSecive)
+}
+
+@Composable
+fun BubbleEffectContainer(
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val bubbles = remember { mutableStateListOf<BubbleAnimState>() }
+    
+    LaunchedEffect(isSelected) {
+        if (isSelected) {
+            bubbles.clear()
+            // Spawn 10 premium translucent soap bubbles
+            val count = 10
+            for (i in 0 until count) {
+                // semi-random angles to create a splash effect upward and outward
+                val angle = -Math.PI / 2 + (Math.random() * Math.PI * 0.8 - Math.PI * 0.4) // upward arc
+                val distance = 40f + (Math.random() * 60f).toFloat()
+                val targetX = (Math.cos(angle) * distance).toFloat()
+                val targetY = (Math.sin(angle) * distance).toFloat()
+                
+                bubbles.add(
+                    BubbleAnimState(
+                        startX = 0f,
+                        startY = 10f, // start slightly lower from bottom bar
+                        targetX = targetX,
+                        targetY = targetY,
+                        radiusSecive = (4 + (Math.random() * 6)).dp,
+                        delay = i * 35 // staggered
+                    )
+                )
+            }
+            
+            val startTime = System.currentTimeMillis()
+            val totalDuration = 800L
+            while (System.currentTimeMillis() - startTime < totalDuration) {
+                val elapsed = System.currentTimeMillis() - startTime
+                for (bubble in bubbles) {
+                    val bubbleElapsed = elapsed - bubble.delay
+                    if (bubbleElapsed > 0) {
+                        val progress = (bubbleElapsed.toFloat() / 500f).coerceIn(0f, 1f)
+                        // cubic ease out
+                        val easedProgress = 1f - (1f - progress) * (1f - progress) * (1f - progress)
+                        
+                        bubble.currentX = bubble.startX + (bubble.targetX - bubble.startX) * easedProgress
+                        // drift up faster
+                        bubble.currentY = bubble.startY + (bubble.targetY - bubble.startY) * easedProgress - (45f * easedProgress)
+                        bubble.alpha = 1f - easedProgress
+                        bubble.currentRadius = bubble.radiusSecive * (0.4f + 0.9f * easedProgress)
+                    } else {
+                        bubble.alpha = 0f
+                    }
+                }
+                delay(16)
+            }
+            bubbles.clear()
+        }
+    }
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        // Draw the bubbles floating behind / around the icon
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            bubbles.forEach { bubble ->
+                if (bubble.alpha > 0f) {
+                    val currentRadiusPx = with(density) { bubble.currentRadius.toPx() }
+                    val centerOffset = Offset(
+                        x = size.width / 2f + bubble.currentX,
+                        y = size.height / 2f + bubble.currentY
+                    )
+                    
+                    // Glass bubble outline with soft rainbow/teal tint
+                    drawCircle(
+                        color = Color(0xFF81D4FA).copy(alpha = bubble.alpha * 0.8f),
+                        radius = currentRadiusPx,
+                        center = centerOffset,
+                        style = Stroke(width = with(density) { 1.dp.toPx() })
+                    )
+                    
+                    // Bubble body ambient glow
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color(0x66B2EBF2).copy(alpha = bubble.alpha * 0.4f),
+                                Color(0x33F8BBD0).copy(alpha = bubble.alpha * 0.2f),
+                                Color.Transparent
+                            ),
+                            center = centerOffset,
+                            radius = currentRadiusPx
+                        ),
+                        radius = currentRadiusPx,
+                        center = centerOffset
+                    )
+
+                    // Bubble specular highlight (shiny spot)
+                    drawCircle(
+                        color = Color.White.copy(alpha = bubble.alpha * 0.9f),
+                        radius = currentRadiusPx * 0.25f,
+                        center = Offset(
+                            x = centerOffset.x - currentRadiusPx * 0.35f,
+                            y = centerOffset.y - currentRadiusPx * 0.35f
+                        )
+                    )
+                }
+            }
+        }
+        content()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,6 +223,12 @@ fun SocialHubApp(viewModel: SocialHubViewModel) {
     val transactions by viewModel.transactions.collectAsStateWithLifecycle(initialValue = emptyList())
     val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle(initialValue = emptyList())
     val events by viewModel.events.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // Trending topics states
+    val trendingTopics by viewModel.trendingTopics.collectAsStateWithLifecycle(initialValue = emptyList())
+    val isTrendingFetching by viewModel.isTrendingFetching.collectAsStateWithLifecycle(initialValue = false)
+    val selectedTopicInsight by viewModel.selectedTopicInsight.collectAsStateWithLifecycle(initialValue = null)
+    val isGeneratingInsight by viewModel.isGeneratingInsight.collectAsStateWithLifecycle(initialValue = false)
 
     // Direct local state for splits
     var marioPizzaSplitPaid by remember { mutableStateOf(false) }
@@ -248,75 +385,124 @@ fun SocialHubApp(viewModel: SocialHubViewModel) {
             }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MinimalSurfaceContainer,
-                tonalElevation = 0.dp,
+            Box(
                 modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 4.dp)
+                    // Ambient bottom neon-glow behind the bar to simulate modern light projection
                     .drawBehind {
-                        drawLine(
-                            color = MinimalBorder,
-                            start = Offset(0f, 0f),
-                            end = Offset(size.width, 0f),
-                            strokeWidth = 1.dp.toPx()
+                        drawRoundRect(
+                            color = Color(0x2CFF4CA0), // Smooth liquid pink glass-glow
+                            topLeft = Offset(-2f, -2f),
+                            size = size.copy(width = size.width + 4f, height = size.height + 4f),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(32.dp.toPx(), 32.dp.toPx()),
+                            style = Stroke(width = 6.dp.toPx())
                         )
                     }
-                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .clip(RoundedCornerShape(32.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x4DFFFFFF), // Bright glass high-glare gloss
+                                Color(0x2BFFD5EC), // Delicious liquid satin rose pink gloss
+                                Color(0x13FFFFFF)  // Sheer base glass shine
+                            )
+                        )
+                    )
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFFFF7B40).copy(alpha = 0.5f), // Glowing Neon Tangerine highlight
+                                Color(0xFFFF4CA0).copy(alpha = 0.7f), // Liquid pink highlight
+                                Color.White.copy(alpha = 0.25f)       // Bright rim glare
+                            )
+                        ),
+                        shape = RoundedCornerShape(32.dp)
+                    )
             ) {
-                NavigationBarItem(
-                    selected = currentScreen is Screen.Feed,
-                    onClick = { viewModel.navigateTo(Screen.Feed) },
-                    icon = { Icon(imageVector = if (currentScreen is Screen.Feed) Icons.Filled.Home else Icons.Outlined.Home, contentDescription = "Feed") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RazorBlue,
-                        indicatorColor = MinimalLavenderContainer,
-                        unselectedIconColor = GrayText
-                    ),
-                    modifier = Modifier.testTag("nav_feed")
-                )
-                NavigationBarItem(
-                    selected = currentScreen is Screen.Creators || currentScreen is Screen.CreatorDetail,
-                    onClick = { viewModel.navigateTo(Screen.Creators) },
-                    icon = { Icon(imageVector = if (currentScreen is Screen.Creators) Icons.Filled.Explore else Icons.Outlined.Explore, contentDescription = "Creators") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RazorBlue,
-                        indicatorColor = MinimalLavenderContainer,
-                        unselectedIconColor = GrayText
-                    ),
-                    modifier = Modifier.testTag("nav_creators")
-                )
-                NavigationBarItem(
-                    selected = currentScreen is Screen.LiveEvents,
-                    onClick = { viewModel.navigateTo(Screen.LiveEvents) },
-                    icon = { Icon(imageVector = if (currentScreen is Screen.LiveEvents) Icons.Filled.Storefront else Icons.Outlined.Storefront, contentDescription = "Market") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RazorBlue,
-                        indicatorColor = MinimalLavenderContainer,
-                        unselectedIconColor = GrayText
-                    ),
-                    modifier = Modifier.testTag("nav_tickets")
-                )
-                NavigationBarItem(
-                    selected = currentScreen is Screen.Chat,
-                    onClick = { viewModel.navigateTo(Screen.Chat()) },
-                    icon = { Icon(imageVector = if (currentScreen is Screen.Chat) Icons.Filled.Mail else Icons.Outlined.Mail, contentDescription = "Secure Chats") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RazorBlue,
-                        indicatorColor = MinimalLavenderContainer,
-                        unselectedIconColor = GrayText
-                    ),
-                    modifier = Modifier.testTag("nav_chat")
-                )
-                NavigationBarItem(
-                    selected = currentScreen is Screen.Wallet,
-                    onClick = { viewModel.navigateTo(Screen.Wallet) },
-                    icon = { Icon(imageVector = if (currentScreen is Screen.Wallet) Icons.Filled.CreditCard else Icons.Outlined.CreditCard, contentDescription = "Virtual Wallet") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RazorBlue,
-                        indicatorColor = MinimalLavenderContainer,
-                        unselectedIconColor = GrayText
-                    ),
-                    modifier = Modifier.testTag("nav_wallet")
-                )
+                NavigationBar(
+                    containerColor = Color.Transparent,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    NavigationBarItem(
+                        selected = currentScreen is Screen.Feed,
+                        onClick = { viewModel.navigateTo(Screen.Feed) },
+                        icon = {
+                            BubbleEffectContainer(isSelected = currentScreen is Screen.Feed) {
+                                Icon(imageVector = if (currentScreen is Screen.Feed) Icons.Filled.Home else Icons.Outlined.Home, contentDescription = "Feed")
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RazorBlue,
+                            indicatorColor = MinimalLavenderContainer,
+                            unselectedIconColor = GrayText
+                        ),
+                        modifier = Modifier.testTag("nav_feed")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen is Screen.Creators || currentScreen is Screen.CreatorDetail,
+                        onClick = { viewModel.navigateTo(Screen.Creators) },
+                        icon = {
+                            BubbleEffectContainer(isSelected = currentScreen is Screen.Creators || currentScreen is Screen.CreatorDetail) {
+                                Icon(imageVector = if (currentScreen is Screen.Creators) Icons.Filled.Explore else Icons.Outlined.Explore, contentDescription = "Creators")
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RazorBlue,
+                            indicatorColor = MinimalLavenderContainer,
+                            unselectedIconColor = GrayText
+                        ),
+                        modifier = Modifier.testTag("nav_creators")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen is Screen.LiveEvents,
+                        onClick = { viewModel.navigateTo(Screen.LiveEvents) },
+                        icon = {
+                            BubbleEffectContainer(isSelected = currentScreen is Screen.LiveEvents) {
+                                Icon(imageVector = if (currentScreen is Screen.LiveEvents) Icons.Filled.Storefront else Icons.Outlined.Storefront, contentDescription = "Market")
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RazorBlue,
+                            indicatorColor = MinimalLavenderContainer,
+                            unselectedIconColor = GrayText
+                        ),
+                        modifier = Modifier.testTag("nav_tickets")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen is Screen.Chat,
+                        onClick = { viewModel.navigateTo(Screen.Chat()) },
+                        icon = {
+                            BubbleEffectContainer(isSelected = currentScreen is Screen.Chat) {
+                                Icon(imageVector = if (currentScreen is Screen.Chat) Icons.Filled.Mail else Icons.Outlined.Mail, contentDescription = "Secure Chats")
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RazorBlue,
+                            indicatorColor = MinimalLavenderContainer,
+                            unselectedIconColor = GrayText
+                        ),
+                        modifier = Modifier.testTag("nav_chat")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen is Screen.Wallet,
+                        onClick = { viewModel.navigateTo(Screen.Wallet) },
+                        icon = {
+                            BubbleEffectContainer(isSelected = currentScreen is Screen.Wallet) {
+                                Icon(imageVector = if (currentScreen is Screen.Wallet) Icons.Filled.CreditCard else Icons.Outlined.CreditCard, contentDescription = "Virtual Wallet")
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RazorBlue,
+                            indicatorColor = MinimalLavenderContainer,
+                            unselectedIconColor = GrayText
+                        ),
+                        modifier = Modifier.testTag("nav_wallet")
+                    )
+                }
             }
         },
         containerColor = ObsidianDark
@@ -326,124 +512,152 @@ fun SocialHubApp(viewModel: SocialHubViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Crossfade(
-                targetState = currentScreen,
-                animationSpec = spring(),
-                label = "ScreenSwitch"
-            ) { target ->
-                when (target) {
-                    is Screen.Feed -> {
-                        if (isDataFetching) {
-                            FeedScreenSkeleton()
-                        } else {
-                            FeedScreen(
-                                posts = filteredPosts,
-                                creators = creators,
-                                subscriptions = subscriptions,
-                                onLike = { viewModel.likePost(it) },
-                                onTip = { post, amt -> viewModel.triggerPostTip(post, amt) },
-                                onUnlock = { creatorId ->
-                                    viewModel.navigateTo(Screen.CreatorDetail(creatorId))
-                                },
-                                onPublishPost = { caption, creator, attachedMediaType -> viewModel.publishPost(caption, creator, attachedMediaType) },
-                                onDiscoverCreators = { viewModel.navigateTo(Screen.Creators) }
-                            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (isHeaderSearchActive) {
+                    TrendingTopicsCard(
+                        topics = trendingTopics,
+                        isFetching = isTrendingFetching,
+                        selectedInsight = selectedTopicInsight,
+                        isGenerating = isGeneratingInsight,
+                        onTopicClick = { topic ->
+                            headerSearchQuery = topic
+                        },
+                        onGenerateInsight = { topic ->
+                            viewModel.generateTopicInsight(topic)
+                        },
+                        onClearInsight = {
+                            viewModel.clearTopicInsight()
+                        },
+                        onRefresh = {
+                            viewModel.fetchTrendingTopics()
                         }
-                    }
-                    is Screen.Creators -> {
-                        if (isDataFetching) {
-                            CreatorsScreenSkeleton()
-                        } else {
-                            CreatorsScreen(
-                                creators = filteredCreators,
-                                subscriptions = subscriptions,
-                                onCreatorClick = { viewModel.navigateTo(Screen.CreatorDetail(it.id)) }
-                            )
-                        }
-                    }
-                    is Screen.CreatorDetail -> {
-                        if (isDataFetching) {
-                            CreatorDetailScreenSkeleton()
-                        } else {
-                            val creatorId = target.creatorId
-                            val creator = creators.find { it.id == creatorId }
-                            if (creator != null) {
-                                CreatorDetailScreen(
-                                    creator = creator,
-                                    subscriptions = subscriptions,
-                                    posts = posts.filter { it.creatorId == creatorId },
-                                    events = events.filter { it.creatorId == creatorId },
-                                    onSubscribeClick = { tier, price ->
-                                        viewModel.triggerSubscriptionBuy(creator, tier, price)
-                                    },
-                                    onCancelSubscription = {
-                                        viewModel.cancelSubscription(creator.id, creator.handle)
-                                    },
-                                    onFollowToggle = {
-                                        viewModel.toggleFollow(creator)
-                                    },
-                                    onMessageClick = {
-                                        viewModel.navigateTo(Screen.Chat(creator.name))
-                                    },
-                                    onLikePost = { viewModel.likePost(it) },
-                                    onBack = { viewModel.navigateTo(Screen.Creators) }
-                                )
-                            } else {
-                                Text("Creator Not Found", color = Color.White)
-                            }
-                        }
-                    }
-                    is Screen.LiveEvents -> {
-                        if (isDataFetching) {
-                            LiveEventsScreenSkeleton()
-                        } else {
-                            LiveEventsScreen(
-                                events = events,
-                                onBuyTicketClick = { viewModel.triggerTicketBuy(it) },
-                                onCreatorDetail = { creatorId -> viewModel.navigateTo(Screen.CreatorDetail(creatorId)) },
-                                walletBalance = walletBalance,
-                                onPurchaseDirect = { name, amt ->
-                                    viewModel.triggerPostTip(
-                                        Post(creatorId = "pixel_queen", creatorName = "Market Item", creatorHandle = "shop", creatorAvatar = "", caption = "Purchased Product: $name", contentImage = "", isPremium = false),
-                                        amt
+                    )
+                }
+
+                Box(modifier = Modifier.weight(1f)) {
+                    Crossfade(
+                        targetState = currentScreen,
+                        animationSpec = spring(),
+                        label = "ScreenSwitch"
+                    ) { target ->
+                        when (target) {
+                            is Screen.Feed -> {
+                                if (isDataFetching) {
+                                    FeedScreenSkeleton()
+                                } else {
+                                    FeedScreen(
+                                        posts = filteredPosts,
+                                        creators = creators,
+                                        subscriptions = subscriptions,
+                                        onLike = { viewModel.likePost(it) },
+                                        onTip = { post, amt -> viewModel.triggerPostTip(post, amt) },
+                                        onUnlock = { creatorId ->
+                                            viewModel.navigateTo(Screen.CreatorDetail(creatorId))
+                                        },
+                                        onPublishPost = { caption, creator, attachedMediaType -> viewModel.publishPost(caption, creator, attachedMediaType) },
+                                        onDiscoverCreators = { viewModel.navigateTo(Screen.Creators) },
+                                        onCreatorClick = { creatorId ->
+                                            viewModel.navigateTo(Screen.CreatorDetail(creatorId))
+                                        }
                                     )
                                 }
+                            }
+                            is Screen.Creators -> {
+                                if (isDataFetching) {
+                                    CreatorsScreenSkeleton()
+                                } else {
+                                    CreatorsScreen(
+                                        creators = filteredCreators,
+                                        subscriptions = subscriptions,
+                                        onCreatorClick = { viewModel.navigateTo(Screen.CreatorDetail(it.id)) }
+                                    )
+                                }
+                            }
+                            is Screen.CreatorDetail -> {
+                                if (isDataFetching) {
+                                    CreatorDetailScreenSkeleton()
+                                } else {
+                                    val creatorId = target.creatorId
+                                    val creator = creators.find { it.id == creatorId }
+                                    if (creator != null) {
+                                        CreatorDetailScreen(
+                                            creator = creator,
+                                            subscriptions = subscriptions,
+                                            posts = posts.filter { it.creatorId == creatorId },
+                                            events = events.filter { it.creatorId == creatorId },
+                                            onSubscribeClick = { tier, price ->
+                                                viewModel.triggerSubscriptionBuy(creator, tier, price)
+                                            },
+                                            onCancelSubscription = {
+                                                viewModel.cancelSubscription(creator.id, creator.handle)
+                                            },
+                                            onFollowToggle = {
+                                                viewModel.toggleFollow(creator)
+                                            },
+                                            onMessageClick = {
+                                                viewModel.navigateTo(Screen.Chat(creator.name))
+                                            },
+                                            onLikePost = { viewModel.likePost(it) },
+                                            onBack = { viewModel.navigateTo(Screen.Creators) }
+                                        )
+                                    } else {
+                                        Text("Creator Not Found", color = Color.White)
+                                    }
+                                }
+                            }
+                            is Screen.LiveEvents -> {
+                                if (isDataFetching) {
+                                    LiveEventsScreenSkeleton()
+                                } else {
+                                    LiveEventsScreen(
+                                        events = events,
+                                        onBuyTicketClick = { viewModel.triggerTicketBuy(it) },
+                                        onCreatorDetail = { creatorId -> viewModel.navigateTo(Screen.CreatorDetail(creatorId)) },
+                                        walletBalance = walletBalance,
+                                        onPurchaseDirect = { name, amt ->
+                                            viewModel.triggerPostTip(
+                                                Post(creatorId = "pixel_queen", creatorName = "Market Item", creatorHandle = "shop", creatorAvatar = "", caption = "Purchased Product: $name", contentImage = "", isPremium = false),
+                                                amt
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                            is Screen.Chat -> ChatScreen(
+                                chatMessages = chatMessages,
+                                creators = creators,
+                                encryptionEnabled = viewModel.chatEncryptionEnabled.collectAsStateWithLifecycle().value,
+                                onToggleEncryption = { viewModel.toggleChatEncryption() },
+                                onSendMessage = { handle, msg -> viewModel.sendChatMessage(handle, msg) },
+                                onPayInvoice = { chat -> viewModel.payChatInvoice(chat) },
+                                onDeclineInvoice = { chat -> viewModel.declineChatInvoice(chat) },
+                                initialRecipient = target.initialRecipient
+                            )
+                            is Screen.Wallet -> WalletScreen(
+                                balance = walletBalance,
+                                transactions = transactions,
+                                userName = userName,
+                                userHandle = userHandle,
+                                onUpdateProfile = { name, handle -> viewModel.updateProfile(name, handle) },
+                                onLoadFunds = { viewModel.addWalletFunds(it) },
+                                onPayPizzaSplit = {
+                                    if (walletBalance >= 21.12) {
+                                        viewModel.triggerPostTip(
+                                            Post(creatorId = "shop", creatorName = "Split Payment", creatorHandle = "bank", creatorAvatar = "", caption = "Mario's Pizza Co-Split Liability", contentImage = "", isPremium=false),
+                                            21.12
+                                        )
+                                        marioPizzaSplitPaid = true
+                                    }
+                                },
+                                pizzaSplitPaid = marioPizzaSplitPaid,
+                                posts = posts,
+                                subscriptions = subscriptions,
+                                creators = creators,
+                                onLikePost = { viewModel.likePost(it) },
+                                onCancelSubscription = { creatorId, handle -> viewModel.cancelSubscription(creatorId, handle) }
                             )
                         }
                     }
-                    is Screen.Chat -> ChatScreen(
-                        chatMessages = chatMessages,
-                        creators = creators,
-                        encryptionEnabled = viewModel.chatEncryptionEnabled.collectAsStateWithLifecycle().value,
-                        onToggleEncryption = { viewModel.toggleChatEncryption() },
-                        onSendMessage = { handle, msg -> viewModel.sendChatMessage(handle, msg) },
-                        onPayInvoice = { chat -> viewModel.payChatInvoice(chat) },
-                        onDeclineInvoice = { chat -> viewModel.declineChatInvoice(chat) },
-                        initialRecipient = target.initialRecipient
-                    )
-                    is Screen.Wallet -> WalletScreen(
-                        balance = walletBalance,
-                        transactions = transactions,
-                        userName = userName,
-                        userHandle = userHandle,
-                        onUpdateProfile = { name, handle -> viewModel.updateProfile(name, handle) },
-                        onLoadFunds = { viewModel.addWalletFunds(it) },
-                        onPayPizzaSplit = {
-                            if (walletBalance >= 21.12) {
-                                viewModel.triggerPostTip(
-                                    Post(creatorId = "shop", creatorName = "Split Payment", creatorHandle = "bank", creatorAvatar = "", caption = "Mario's Pizza Co-Split Liability", contentImage = "", isPremium=false),
-                                    21.12
-                                )
-                                marioPizzaSplitPaid = true
-                            }
-                        },
-                        pizzaSplitPaid = marioPizzaSplitPaid,
-                        posts = posts,
-                        subscriptions = subscriptions,
-                        creators = creators,
-                        onLikePost = { viewModel.likePost(it) },
-                        onCancelSubscription = { creatorId, handle -> viewModel.cancelSubscription(creatorId, handle) }
-                    )
                 }
             }
 
@@ -486,12 +700,159 @@ fun FeedScreen(
     onTip: (Post, Double) -> Unit,
     onUnlock: (String) -> Unit,
     onPublishPost: (String, Creator?, String?) -> Unit,
-    onDiscoverCreators: () -> Unit
+    onDiscoverCreators: () -> Unit,
+    onCreatorClick: (String) -> Unit
 ) {
     var showStoryStudio by remember { mutableStateOf(false) }
     var showNewPostDialog by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    var isGridView by remember { mutableStateOf(false) }
+    var selectedGridPost by remember { mutableStateOf<Post?>(null) }
+    
+    // Performance Cache Booster for Feed Refresh
+    var isBoostingRefresh by remember { mutableStateOf(false) }
+    var boostProgress by remember { mutableStateOf(0f) }
+    var showBoostSuccessBadge by remember { mutableStateOf(false) }
+    
+    val coroutineScope = rememberCoroutineScope()
+
+    val onTriggerBoostRefresh = {
+        if (!isBoostingRefresh) {
+            coroutineScope.launch {
+                isBoostingRefresh = true
+                showBoostSuccessBadge = false
+                boostProgress = 0f
+                while (boostProgress < 1f) {
+                    kotlinx.coroutines.delay(35)
+                    boostProgress += 0.05f
+                }
+                boostProgress = 1f
+                kotlinx.coroutines.delay(150)
+                isBoostingRefresh = false
+                showBoostSuccessBadge = true
+                kotlinx.coroutines.delay(3000)
+                showBoostSuccessBadge = false
+            }
+        }
+    }
+
+    var pullOffset by remember { mutableStateOf(0f) }
+    val maxPull = 190f
+    
+    val nestedScrollConnection = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                val dy = available.y
+                if (dy < 0 && pullOffset > 0) {
+                    val consumed = dy.coerceAtLeast(-pullOffset)
+                    pullOffset += consumed
+                    return androidx.compose.ui.geometry.Offset(0f, consumed)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: androidx.compose.ui.geometry.Offset,
+                available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource
+            ): androidx.compose.ui.geometry.Offset {
+                val dy = available.y
+                if (dy > 0 && !isBoostingRefresh) {
+                    val added = dy * 0.45f
+                    val old = pullOffset
+                    pullOffset = (pullOffset + added).coerceAtMost(maxPull)
+                    return androidx.compose.ui.geometry.Offset(0f, pullOffset - old)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                if (pullOffset >= maxPull - 15 && !isBoostingRefresh) {
+                    coroutineScope.launch {
+                        onTriggerBoostRefresh()
+                        while (pullOffset > 0f) {
+                            kotlinx.coroutines.delay(10)
+                            pullOffset = (pullOffset - 5f).coerceAtLeast(0f)
+                        }
+                    }
+                } else {
+                    coroutineScope.launch {
+                        while (pullOffset > 0f) {
+                            kotlinx.coroutines.delay(10)
+                            pullOffset = (pullOffset - 8f).coerceAtLeast(0f)
+                        }
+                    }
+                }
+                return androidx.compose.ui.unit.Velocity.Zero
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(nestedScrollConnection)
+    ) {
+        // Glowing Pull to Refresh / Cache Boost Indicator Overlay
+        if (pullOffset > 0f || isBoostingRefresh) {
+            val progress = (pullOffset / maxPull).coerceIn(0f, 1f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height((pullOffset / 2 + 50f).dp.coerceAtMost(90.dp))
+                    .background(Color(0xE6130E22))
+                    .drawBehind {
+                        val strokeWidth = 1.dp.toPx()
+                        val y = size.height - strokeWidth / 2
+                        drawLine(
+                            color = Color.White.copy(alpha = 0.08f),
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = strokeWidth
+                        )
+                    }
+                    .padding(vertical = 10.dp)
+                    .align(Alignment.TopCenter),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            progress = if (isBoostingRefresh) boostProgress else progress,
+                            color = InstaPink,
+                            trackColor = Color.White.copy(alpha = 0.1f),
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = RazorTeal,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            text = if (isBoostingRefresh) "BOOSTING FEED..." else if (pullOffset >= maxPull - 15) "RELEASE TO INJECT" else "PULL TO BOOST STREAM",
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.6.sp
+                        )
+                        Text(
+                            text = if (isBoostingRefresh) "Calibrating dynamic cores" else "Latency Compression Boost",
+                            color = GrayText,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+        }
+
         if (posts.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -566,6 +927,8 @@ fun FeedScreen(
                 }
             }
         } else {
+            val chunkedGridPosts = remember(posts) { posts.chunked(3) }
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 80.dp)
@@ -573,26 +936,339 @@ fun FeedScreen(
                 // Horizontal Stories Bar - Page 1
                 item {
                     StoriesBar(
-                        onCreateStoryClick = { showStoryStudio = true }
+                        onCreateStoryClick = { showStoryStudio = true },
+                        onCreatorClick = onCreatorClick
                     )
                 }
 
-                items(posts, key = { it.id }) { post ->
-                    val hasSubscription = subscriptions.any {
-                        it.creatorId == post.creatorId &&
-                        (it.tierName == "GOLD" || 
-                         (it.tierName == "SILVER" && post.requiredTier != "GOLD") || 
-                         (it.tierName == "BRONZE" && post.requiredTier == "BRONZE"))
+                // Holographic Boost Cache Accelerator Controller
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0x13FFFFFF))
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+                                .clickable { onTriggerBoostRefresh() }
+                                .padding(12.dp)
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.ElectricBolt,
+                                            contentDescription = "Boost flow",
+                                            tint = if (isBoostingRefresh) RazorTeal else InstaPink,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isBoostingRefresh) "ACCELERATING REFRESH..." else "TAP TO BOOST FEED STREAM",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 11.5.sp,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = if (isBoostingRefresh) "${(boostProgress * 100).toInt()}%" else "ACTIVE CORES",
+                                        color = if (isBoostingRefresh) RazorTeal else SafeGold,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(8.dp))
+                                
+                                // Glowing fluid linear indicator
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.08f))
+                                ) {
+                                    if (isBoostingRefresh) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .fillMaxWidth(boostProgress)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(RazorBlue, InstaPink, RazorTeal)
+                                                    )
+                                                )
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .fillMaxWidth(0.35f)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(RazorBlue.copy(alpha = 0.5f), InstaPink.copy(alpha = 0.5f))
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Holographic success feedback label
+                        if (showBoostSuccessBadge) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(RazorTeal.copy(alpha = 0.15f))
+                                    .border(1.dp, RazorTeal.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                                    .padding(vertical = 8.dp, horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Success",
+                                    tint = RazorTeal,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Feed Cache Boosted Successfully • Latency: 0.003s",
+                                    color = RazorTeal,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
                     }
-                    val isLocked = post.isPremium && !hasSubscription
+                }
 
-                    PostCard(
-                        post = post,
-                        isLocked = isLocked,
-                        onLike = { onLike(post) },
-                        onTip = { amt -> onTip(post, amt) },
-                        onUnlock = { onUnlock(post.creatorId) }
-                    )
+                // Dual view modes with gorgeous liquid glass styling
+                item {
+                    val streamBrush = remember { Brush.linearGradient(colors = listOf(RazorBlue.copy(alpha = 0.35f), InstaPink.copy(alpha = 0.35f))) }
+                    val streamModifier = if (!isGridView) Modifier.background(streamBrush) else Modifier.background(Color.Transparent)
+                    val gridModifier = if (isGridView) Modifier.background(streamBrush) else Modifier.background(Color.Transparent)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x18FFFFFF))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+                            .padding(4.dp)
+                    ) {
+                        // Stream view button
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .then(streamModifier)
+                                .border(1.dp, if (!isGridView) Color.White.copy(alpha = 0.25f) else Color.Transparent, RoundedCornerShape(12.dp))
+                                .clickable { isGridView = false }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = "Stream mode",
+                                    tint = if (!isGridView) Color.White else GrayText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "STREAM DECK",
+                                    color = if (!isGridView) Color.White else GrayText,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
+
+                        // Grid view button
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .then(gridModifier)
+                                .border(1.dp, if (isGridView) Color.White.copy(alpha = 0.25f) else Color.Transparent, RoundedCornerShape(12.dp))
+                                .clickable { isGridView = true }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = "Grid mode",
+                                    tint = if (isGridView) Color.White else GrayText,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "INSTA GRID",
+                                    color = if (isGridView) Color.White else GrayText,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (isGridView) {
+                    items(chunkedGridPosts) { rowPosts ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 2.dp)
+                        ) {
+                            rowPosts.forEach { post ->
+                                val hasSubscription = subscriptions.any {
+                                    it.creatorId == post.creatorId &&
+                                    (it.tierName == "GOLD" || 
+                                     (it.tierName == "SILVER" && post.requiredTier != "GOLD") || 
+                                     (it.tierName == "BRONZE" && post.requiredTier == "BRONZE"))
+                                }
+                                val isLocked = post.isPremium && !hasSubscription
+
+                                val imageUrl = when (post.contentImage) {
+                                    "latte_art" -> "https://images.unsplash.com/photo-1541167760496-1628856ab772?w=800&auto=format&fit=crop&q=80"
+                                    "music_studio" -> "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=800&auto=format&fit=crop&q=80"
+                                    "attached_image" -> "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80"
+                                    "attached_audio" -> "https://images.unsplash.com/photo-1484755560695-a4c68e910a14?w=800&auto=format&fit=crop&q=80"
+                                    "attached_video" -> "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?w=800&auto=format&fit=crop&q=80"
+                                    else -> "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80"
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(1f)
+                                        .padding(2.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFF130E22))
+                                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                        .clickable { selectedGridPost = post }
+                                ) {
+                                    AsyncImage(
+                                        model = imageUrl,
+                                        contentDescription = "Grid Image",
+                                        modifier = Modifier.fillMaxSize().alpha(0.85f),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    
+                                    // Ambient gloss gradient overlay
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    colors = listOf(Color.White.copy(alpha = 0.12f), Color.Transparent)
+                                                )
+                                            )
+                                    )
+
+                                    // Likes / Comments overlay indicators
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .align(Alignment.BottomCenter)
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
+                                                )
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.Favorite,
+                                                contentDescription = "Likes",
+                                                tint = InstaPink,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "${post.likesCount}",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                        
+                                        if (isLocked) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = "Locked",
+                                                tint = SafeGold,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                        } else {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ChatBubble,
+                                                    contentDescription = "Comments",
+                                                    tint = RazorTeal,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text(
+                                                    text = "4",
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.ExtraBold
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (rowPosts.size < 3) {
+                                for (i in 0 until (3 - rowPosts.size)) {
+                                    Spacer(modifier = Modifier.weight(1f).padding(2.dp))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    items(posts, key = { it.id }) { post ->
+                        val hasSubscription = subscriptions.any {
+                            it.creatorId == post.creatorId &&
+                            (it.tierName == "GOLD" || 
+                             (it.tierName == "SILVER" && post.requiredTier != "GOLD") || 
+                             (it.tierName == "BRONZE" && post.requiredTier == "BRONZE"))
+                        }
+                        val isLocked = post.isPremium && !hasSubscription
+
+                        EntranceAnimationContainer {
+                            PostCard(
+                                post = post,
+                                isLocked = isLocked,
+                                onLike = { onLike(post) },
+                                onTip = { amt -> onTip(post, amt) },
+                                onUnlock = { onUnlock(post.creatorId) },
+                                onCreatorClick = { onCreatorClick(post.creatorId) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -629,6 +1305,68 @@ fun FeedScreen(
             onDismiss = { showNewPostDialog = false },
             onPublish = onPublishPost
         )
+    }
+
+    selectedGridPost?.let { post ->
+        Dialog(onDismissRequest = { selectedGridPost = null }) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(ObsidianDark)
+                    .border(1.2.dp, Brush.linearGradient(colors = listOf(Color.White.copy(0.3f), Color.White.copy(0.05f))), RoundedCornerShape(24.dp))
+                    .padding(vertical = 12.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "POST EXPLORER DETAILS",
+                            fontWeight = FontWeight.ExtraBold,
+                            color = InstaPink,
+                            fontSize = 11.5.sp,
+                            letterSpacing = 0.8.sp
+                        )
+                        IconButton(onClick = { selectedGridPost = null }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Detail Modal",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    val hasSubscription = subscriptions.any {
+                        it.creatorId == post.creatorId &&
+                        (it.tierName == "GOLD" || 
+                         (it.tierName == "SILVER" && post.requiredTier != "GOLD") || 
+                         (it.tierName == "BRONZE" && post.requiredTier == "BRONZE"))
+                    }
+                    val isLocked = post.isPremium && !hasSubscription
+
+                    PostCard(
+                        post = post,
+                        isLocked = isLocked,
+                        onLike = { onLike(post) },
+                        onTip = { amt -> onTip(post, amt) },
+                        onUnlock = { 
+                            selectedGridPost = null
+                            onUnlock(post.creatorId) 
+                        },
+                        onCreatorClick = {
+                            selectedGridPost = null
+                            onCreatorClick(post.creatorId)
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -824,7 +1562,11 @@ fun NewPostDialog(
                 "video" -> arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO)
                 "media" -> {
                     if (android.os.Build.VERSION.SDK_INT >= 33) {
-                        arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES)
+                        arrayOf(
+                            android.Manifest.permission.READ_MEDIA_IMAGES,
+                            android.Manifest.permission.READ_MEDIA_VIDEO,
+                            android.Manifest.permission.READ_MEDIA_AUDIO
+                        )
                     } else {
                         arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
                     }
@@ -1491,7 +2233,7 @@ fun NewPostDialog(
 }
 
 @Composable
-fun StoriesBar(onCreateStoryClick: () -> Unit) {
+fun StoriesBar(onCreateStoryClick: () -> Unit, onCreatorClick: (String) -> Unit = {}) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1540,7 +2282,10 @@ fun StoriesBar(onCreateStoryClick: () -> Unit) {
 
             // Sarah Story (With GLOWING CHANGER ring!) - Page 1
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable { onCreatorClick("aura_music") }
+                ) {
                     Box(
                         modifier = Modifier
                             .size(68.dp)
@@ -1566,7 +2311,10 @@ fun StoriesBar(onCreateStoryClick: () -> Unit) {
 
             // Alex Story - Page 1
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable { onCreatorClick("alex_johnson") }
+                ) {
                     Box(
                         modifier = Modifier
                             .size(68.dp)
@@ -1592,7 +2340,10 @@ fun StoriesBar(onCreateStoryClick: () -> Unit) {
 
             // Emily Story - Page 1
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable { onCreatorClick("pixel_queen") }
+                ) {
                     Box(
                         modifier = Modifier
                             .size(68.dp)
@@ -1625,11 +2376,62 @@ fun PostCard(
     isLocked: Boolean,
     onLike: () -> Unit,
     onTip: (Double) -> Unit,
-    onUnlock: () -> Unit
+    onUnlock: () -> Unit,
+    onCreatorClick: () -> Unit = {}
 ) {
-    var hasUserLiked by remember { mutableStateOf(false) }
+    var isLikedLocal by remember(post.id, post.isLiked) { mutableStateOf(post.isLiked) }
+    var likesCountLocal by remember(post.id, post.likesCount) { mutableStateOf(post.likesCount) }
     val scale = remember { Animatable(1f) }
+    val commentScale = remember { Animatable(1f) }
+    val commentRotation = remember { Animatable(0f) }
     val coroutineScope = rememberCoroutineScope()
+
+    var commentsCount by remember(post.id) { mutableStateOf(84) }
+    var showCommentsDialog by remember { mutableStateOf(false) }
+
+    val commentsList = remember(post.id) {
+        mutableStateListOf<String>().apply {
+            when (post.creatorId) {
+                "alex_johnson" -> {
+                    addAll(listOf(
+                        "This espresso pull looks incredibly clean! ☕️",
+                        "What origin coffee beans is this? Savoring it!",
+                        "Awesome latte art patterns. Always a masterclass.",
+                        "The crema consistency is amazing. Next level."
+                    ))
+                }
+                "aura_music" -> {
+                    addAll(listOf(
+                        "This ambient synth line is magnificent! 🌌🎹",
+                        "Which oscillator waveform did you tune?",
+                        "Perfect background study tracks right here.",
+                        "Beautiful synthwave sunset frequencies."
+                    ))
+                }
+                "alex_future" -> {
+                    addAll(listOf(
+                        "Superb market analysis. Bronze tier is so valuable! 📈",
+                        "What is your forecast for NVIDIA silicon targets this month?",
+                        "Excellent detail. Incredibly crisp charts.",
+                        "Substantial financial reports as always."
+                    ))
+                }
+                else -> {
+                    addAll(listOf(
+                        "This looks like pristine digital craft! ✨⚡️",
+                        "Incredible, love the cyberpunk tech vibe.",
+                        "Looking forward to the next update!",
+                        "Superb layout and visual content."
+                    ))
+                }
+            }
+        }
+    }
+    
+    // Sync comments count
+    LaunchedEffect(commentsList.size) {
+        commentsCount = commentsList.size
+    }
 
     Card(
         modifier = Modifier
@@ -1646,22 +2448,39 @@ fun PostCard(
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Profile Avatar Circular Indicator
+                // Profile Avatar Circular Indicator with ultra-polished pink-orange fluid gradient border
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .background(RazorBlue),
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(RazorBlue, InstaPink)
+                            )
+                        )
+                        .clickable { onCreatorClick() }
+                        .padding(2.5.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = post.creatorName.take(1).uppercase(),
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(CircleShape)
+                            .background(ObsidianDark),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = post.creatorName.take(1).uppercase(),
+                            fontWeight = FontWeight.ExtraBold,
+                            color = InstaPink,
+                            fontSize = 15.sp
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Column(
+                    modifier = Modifier.clickable { onCreatorClick() }
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = post.creatorName,
@@ -1691,7 +2510,7 @@ fun PostCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(250.dp)
+                        .height(290.dp)
                         .background(
                             Brush.radialGradient(
                                 colors = listOf(MinimalLavenderContainer, ObsidianDark)
@@ -1735,12 +2554,56 @@ fun PostCard(
                     }
                 }
             } else {
+                var heartVisible by remember { mutableStateOf(false) }
+                val heartScale = remember { Animatable(0f) }
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(270.dp)
+                        .height(290.dp)
                         .background(Color(0xFF130E22))
+                        .pointerInput(post.id) {
+                            detectTapGestures(
+                                onDoubleTap = { offset ->
+                                    if (!isLikedLocal) {
+                                        isLikedLocal = true
+                                        likesCountLocal += 1
+                                        onLike()
+                                    }
+                                    coroutineScope.launch {
+                                        heartVisible = true
+                                        heartScale.snapTo(0f)
+                                        heartScale.animateTo(
+                                            1.5f,
+                                            animationSpec = spring(
+                                                dampingRatio = Spring.DampingRatioHighBouncy,
+                                                stiffness = Spring.StiffnessMedium
+                                            )
+                                        )
+                                        delay(500)
+                                        heartScale.animateTo(0f, animationSpec = tween(200))
+                                        heartVisible = false
+                                    }
+                                }
+                            )
+                        }
                 ) {
+                    val imageUrl = when (post.contentImage) {
+                        "latte_art" -> "https://images.unsplash.com/photo-1541167760496-1628856ab772?w=800&auto=format&fit=crop&q=80"
+                        "music_studio" -> "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=800&auto=format&fit=crop&q=80"
+                        "attached_image" -> "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80"
+                        "attached_audio" -> "https://images.unsplash.com/photo-1484755560695-a4c68e910a14?w=800&auto=format&fit=crop&q=80"
+                        "attached_video" -> "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?w=800&auto=format&fit=crop&q=80"
+                        else -> "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80"
+                    }
+
+                    AsyncImage(
+                        model = imageUrl,
+                        contentDescription = "Post Content Image",
+                        modifier = Modifier.fillMaxSize().alpha(0.6f),
+                        contentScale = ContentScale.Crop
+                    )
+
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val canvasWidth = size.width
                         val canvasHeight = size.height
@@ -1962,6 +2825,22 @@ fun PostCard(
                             Text(text = "Blue Bottle", color = RazorTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+
+                    // Double-tap Pop heart overlay animation
+                    if (heartVisible) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = "Double tap heart animation",
+                            tint = Color(0xFFFF2D7F),
+                            modifier = Modifier
+                                .size(100.dp)
+                                .align(Alignment.Center)
+                                .graphicsLayer {
+                                    scaleX = heartScale.value
+                                    scaleY = heartScale.value
+                                }
+                        )
+                    }
                 }
             }
 
@@ -1985,7 +2864,12 @@ fun PostCard(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable {
-                            hasUserLiked = !hasUserLiked
+                            isLikedLocal = !isLikedLocal
+                            if (isLikedLocal) {
+                                likesCountLocal += 1
+                            } else {
+                                likesCountLocal -= 1
+                            }
                             onLike()
                             coroutineScope.launch {
                                 scale.snapTo(1f)
@@ -2008,9 +2892,9 @@ fun PostCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Icon(
-                        imageVector = if (hasUserLiked) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                        imageVector = if (isLikedLocal) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                         contentDescription = "Like button",
-                        tint = if (hasUserLiked) InstaPink else GrayText,
+                        tint = if (isLikedLocal) InstaPink else GrayText,
                         modifier = Modifier
                             .graphicsLayer {
                                 scaleX = scale.value
@@ -2020,10 +2904,10 @@ fun PostCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (post.likesCount >= 1000) {
-                            String.format("%.1fk", post.likesCount / 1000.0)
+                        text = if (likesCountLocal >= 1000) {
+                            String.format("%.1fk", likesCountLocal / 1000.0)
                         } else {
-                            post.likesCount.toString()
+                            likesCountLocal.toString()
                         },
                         color = LightText,
                         fontWeight = FontWeight.Bold,
@@ -2031,48 +2915,115 @@ fun PostCard(
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.ChatBubbleOutline, contentDescription = "Comments button", tint = GrayText, modifier = Modifier.size(20.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            showCommentsDialog = true
+                            coroutineScope.launch {
+                                launch {
+                                    commentScale.snapTo(1f)
+                                    commentScale.animateTo(1.3f, spring(dampingRatio = Spring.DampingRatioHighBouncy))
+                                    commentScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                                }
+                                launch {
+                                    commentRotation.snapTo(0f)
+                                    commentRotation.animateTo(15f, tween(100))
+                                    commentRotation.animateTo(-15f, tween(100))
+                                    commentRotation.animateTo(0f, tween(100))
+                                }
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChatBubbleOutline, 
+                        contentDescription = "Comments button", 
+                        tint = GrayText, 
+                        modifier = Modifier
+                            .graphicsLayer {
+                                scaleX = commentScale.value
+                                scaleY = commentScale.value
+                                rotationZ = commentRotation.value
+                            }
+                            .size(20.dp)
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "84", color = LightText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(text = "$commentsCount", color = LightText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
 
                 Icon(imageVector = Icons.Default.Share, contentDescription = "Share post", tint = LightText, modifier = Modifier.size(20.dp))
 
-                // Disabled Tips action button with Coming Soon sticker
-                Box(contentAlignment = Alignment.TopEnd) {
+                // Enabled tips trigger with functional callback instead of hardcoded disabled states
+                Box(contentAlignment = Alignment.Center) {
                     Button(
-                        onClick = { /* Inactive */ },
-                        enabled = false,
+                        onClick = { onTip(5.0) },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = RazorBlue.copy(alpha = 0.15f),
-                            disabledContainerColor = RazorBlue.copy(alpha = 0.15f)
+                            containerColor = RazorBlue.copy(alpha = 0.85f)
                         ),
                         shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                        modifier = Modifier.height(36.dp).testTag("pay_5_tip_btn")
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp).testTag("pay_5_tip_btn")
                     ) {
-                        Text(text = "Pay $5", color = GrayText, fontWeight = FontWeight.Black, fontSize = 13.sp)
-                    }
-                    
-                    Box(
-                        modifier = Modifier
-                            .offset(x = 4.dp, y = (-6).dp)
-                            .background(Color(0xFFEA739B), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    ) {
-                        Text("SOON", color = Color.Black, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "Tip $5", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 12.sp)
                     }
                 }
             }
 
             Text(
-                text = "View all 84 comments",
+                text = "View all $commentsCount comments",
                 style = MaterialTheme.typography.bodySmall,
                 color = GrayText,
-                modifier = Modifier.padding(start = 14.dp, bottom = 14.dp)
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                        showCommentsDialog = true
+                    }
+                    .padding(start = 14.dp, bottom = 14.dp, top = 2.dp, end = 14.dp)
             )
         }
+    }
+
+    if (showCommentsDialog) {
+        CommentDialog(
+            post = post,
+            comments = commentsList,
+            onAddComment = { text ->
+                commentsList.add(text)
+            },
+            onDismiss = { showCommentsDialog = false }
+        )
+    }
+}
+
+@Composable
+fun EntranceAnimationContainer(
+    content: @Composable () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    val alpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 400, easing = androidx.compose.animation.core.LinearOutSlowInEasing)
+    )
+    val offsetY by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (visible) 0.dp else 30.dp,
+        animationSpec = androidx.compose.animation.core.spring(
+            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+            stiffness = androidx.compose.animation.core.Spring.StiffnessLow
+        )
+    )
+    
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+    
+    Box(
+        modifier = Modifier
+            .alpha(alpha)
+            .offset(y = offsetY)
+    ) {
+        content()
     }
 }
 
@@ -2791,32 +3742,38 @@ fun ChatScreen(
                 }
             }
 
-            // Segment Tabs friends vs global
+            // Segment Tabs friends vs global with crystal-clear liquid glass styling
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF1C132E))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0x22FFFFFF))
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(14.dp))
                     .padding(4.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF2E1C44))
-                        .padding(8.dp),
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(InstaPink.copy(alpha = 0.45f), RazorBlue.copy(alpha = 0.45f))
+                            )
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                        .padding(10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("FRIENDS", color = RazorTeal, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("FRIENDS", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, letterSpacing = 0.5.sp)
                 }
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(8.dp),
+                        .padding(10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("GLOBAL", color = GrayText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("GLOBAL", color = Color.White.copy(alpha = 0.65f), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, letterSpacing = 0.5.sp)
                 }
             }
 
@@ -3258,23 +4215,41 @@ fun ChatConversationRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onOpen() }
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(modifier = Modifier.size(46.dp)) {
+        Box(modifier = Modifier.size(48.dp)) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(46.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF1A1F2E)),
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(RazorBlue, InstaPink)
+                        )
+                    )
+                    .padding(2.5.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(title.take(1).uppercase(), color = LightText, fontWeight = FontWeight.Bold)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(ObsidianDark),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = title.take(1).uppercase(),
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 15.sp
+                    )
+                }
             }
             if (indicator != null) {
                 Box(
                     modifier = Modifier
-                        .size(12.dp)
+                        .size(13.dp)
                         .clip(CircleShape)
                         .background(indicator)
                         .border(2.dp, ObsidianDark, CircleShape)
@@ -3284,10 +4259,29 @@ fun ChatConversationRow(
         }
         Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, fontWeight = FontWeight.Bold, color = LightText, fontSize = 14.sp)
-            Text(text = sub, color = GrayText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = title,
+                fontWeight = FontWeight.ExtraBold, // Razor bold headings
+                color = Color.White,
+                fontSize = 15.sp,
+                letterSpacing = 0.2.sp
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = sub,
+                color = Color.White.copy(alpha = 0.85f), // High visibility clear subtitle
+                fontSize = 13.sp, // Slightly larger for supreme readability
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        Text(text = time, color = GrayText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = time,
+            color = Color.White.copy(alpha = 0.75f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -3299,30 +4293,84 @@ fun ChatBubble(
     isMe: Boolean
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (isMe) RazorTeal else Color(0xFF261D3A)
-            ),
-            modifier = Modifier.widthIn(max = 260.dp)
+        val bubbleShape = if (isMe) {
+            RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 4.dp)
+        } else {
+            RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 4.dp)
+        }
+
+        Box(
+            modifier = Modifier
+                .widthIn(max = 270.dp)
+                .clip(bubbleShape)
+                .background(
+                    if (isMe) {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFFFF4CA0), // Glowing Liquid Pink
+                                Color(0xFFFF7B40) // Neon Tangerine
+                            )
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x3BFFFFFF), // Glossy high-glare glass top highlight
+                                Color(0x1BFFFFFF)  // Solid glass base
+                            )
+                        )
+                    }
+                )
+                .border(
+                    width = 1.2.dp,
+                    brush = Brush.linearGradient(
+                        colors = if (isMe) {
+                            listOf(
+                                Color.White.copy(alpha = 0.6f),
+                                Color.White.copy(alpha = 0.15f)
+                            )
+                        } else {
+                            listOf(
+                                Color.White.copy(alpha = 0.35f),
+                                Color(0x3BFF4CA0) // Delicate pink border reflection
+                            )
+                        }
+                    ),
+                    shape = bubbleShape
+                )
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column {
                 if (!isMe) {
-                    Text(text = sender, fontWeight = FontWeight.Black, color = RazorBlue, fontSize = 11.sp)
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = sender.uppercase(),
+                        fontWeight = FontWeight.ExtraBold, // Razor sharp bold name
+                        color = Color(0xFFFF4CA0), // Vivid liquid pink name for high contrast
+                        fontSize = 11.5.sp,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
                 }
                 Text(
                     text = text,
-                    color = if (isMe) Color.Black else Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal
+                    color = Color.White, // Absolute high contrast crisp white text
+                    fontSize = 14.sp,    // Slightly larger for ultra clear readability
+                    fontWeight = FontWeight.Bold, // Bold weight to render as razor-sharp pixels without blurriness
+                    lineHeight = 19.sp
                 )
             }
         }
-        Text(text = time, color = GrayText, fontSize = 9.sp, modifier = Modifier.padding(top = 4.dp))
+        Text(
+            text = time,
+            color = Color.White.copy(alpha = 0.7f), // High visibility metadata contrast
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 4.dp, start = 6.dp, end = 6.dp)
+        )
     }
 }
 
@@ -5211,10 +6259,12 @@ fun rememberShimmerBrushValue(): Brush {
         label = "shimmer_anim"
     )
 
+    // Bright glass metallic pastel shimmer colors (not dark and blurry)
     val shimmerColors = listOf(
-        ObsidianDark,
-        CardBackground,
-        ObsidianDark
+        Color(0x2BFFFFFF), // Elegant translucent white glass sheer
+        Color(0x4DFF4CA0), // Glowing bright liquid pink highlight
+        Color(0x4DFF7B40), // Bright neon tangerine highlight
+        Color(0x2BFFFFFF)
     )
 
     return Brush.linearGradient(
@@ -5595,13 +6645,63 @@ fun PermissionsOnboardingDialog(
     onPermissionsGranted: (Boolean) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    
+    var cameraStatus by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.CAMERA
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    
+    var micStatus by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    
+    var mediaStatus by remember {
+        mutableStateOf(
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.READ_MEDIA_IMAGES
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.READ_MEDIA_VIDEO
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.READ_MEDIA_AUDIO
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            } else {
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+    
+    var notificationsStatus by remember {
+        mutableStateOf(
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, "android.permission.POST_NOTIFICATIONS"
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
     val systemPermissions = if (android.os.Build.VERSION.SDK_INT >= 33) {
         arrayOf(
             android.Manifest.permission.CAMERA,
             android.Manifest.permission.RECORD_AUDIO,
             android.Manifest.permission.READ_MEDIA_IMAGES,
             android.Manifest.permission.READ_MEDIA_VIDEO,
-            android.Manifest.permission.READ_MEDIA_AUDIO
+            android.Manifest.permission.READ_MEDIA_AUDIO,
+            "android.permission.POST_NOTIFICATIONS"
         )
     } else {
         arrayOf(
@@ -5614,9 +6714,20 @@ fun PermissionsOnboardingDialog(
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        val allGranted = results.values.all { it }
-        onPermissionsGranted(allGranted)
+        cameraStatus = results[android.Manifest.permission.CAMERA] ?: cameraStatus
+        micStatus = results[android.Manifest.permission.RECORD_AUDIO] ?: micStatus
+        
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            mediaStatus = (results[android.Manifest.permission.READ_MEDIA_IMAGES] == true) ||
+                          (results[android.Manifest.permission.READ_MEDIA_VIDEO] == true) ||
+                          (results[android.Manifest.permission.READ_MEDIA_AUDIO] == true)
+            notificationsStatus = results["android.permission.POST_NOTIFICATIONS"] ?: notificationsStatus
+        } else {
+            mediaStatus = results[android.Manifest.permission.READ_EXTERNAL_STORAGE] ?: mediaStatus
+        }
     }
+
+    val isAllCurrentlyGranted = cameraStatus && micStatus && mediaStatus && notificationsStatus
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -5682,44 +6793,69 @@ fun PermissionsOnboardingDialog(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     PermissionRowItem(
-                        icon = Icons.Default.Create,
+                        icon = Icons.Default.CameraAlt,
                         title = "Live Camera Snapshots",
-                        desc = "Used for real-time creative photo uploads."
+                        desc = "Used for real-time creative photo uploads.",
+                        isGranted = cameraStatus
                     )
                     PermissionRowItem(
-                        icon = Icons.Default.MusicNote,
+                        icon = Icons.Default.Mic,
                         title = "Microphone Audio Capture",
-                        desc = "Allows recording voices, comments & sound narratives."
+                        desc = "Allows recording voices, comments & sound narratives.",
+                        isGranted = micStatus
                     )
                     PermissionRowItem(
-                        icon = Icons.Default.Layers,
+                        icon = Icons.Default.PhotoLibrary,
                         title = "Media Pickers & Storage",
-                        desc = "Retrieve media files, videos, and music clips."
+                        desc = "Retrieve media files, videos, and music clips.",
+                        isGranted = mediaStatus
                     )
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        PermissionRowItem(
+                            icon = Icons.Default.Notifications,
+                            title = "System Push Notifications",
+                            desc = "Provides real-time transactional alert telemetry.",
+                            isGranted = notificationsStatus
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("No, Sandbox Only", color = GrayText, fontWeight = FontWeight.Bold)
-                    }
-
+                if (isAllCurrentlyGranted) {
                     Button(
                         onClick = {
-                            launcher.launch(systemPermissions)
+                            onPermissionsGranted(true)
+                            onDismiss()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = RazorTeal),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Grant Permissions", color = Color.Black, fontWeight = FontWeight.Black)
+                        Text("Enter Social Hub", color = Color.Black, fontWeight = FontWeight.Black)
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Skip for Now", color = GrayText, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = {
+                                launcher.launch(systemPermissions)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = RazorTeal),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1.2f)
+                        ) {
+                            Text("Grant Permissions", color = Color.Black, fontWeight = FontWeight.Black)
+                        }
                     }
                 }
             }
@@ -5731,7 +6867,8 @@ fun PermissionsOnboardingDialog(
 fun PermissionRowItem(
     icon: ImageVector,
     title: String,
-    desc: String
+    desc: String,
+    isGranted: Boolean
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -5741,14 +6878,34 @@ fun PermissionRowItem(
         Box(
             modifier = Modifier
                 .size(36.dp)
-                .background(RazorBlue.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                .background(if (isGranted) RazorTeal.copy(alpha = 0.15f) else RazorBlue.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(imageVector = icon, contentDescription = null, tint = RazorBlue, modifier = Modifier.size(20.dp))
+            Icon(
+                imageVector = icon, 
+                contentDescription = null, 
+                tint = if (isGranted) RazorTeal else RazorBlue, 
+                modifier = Modifier.size(20.dp)
+            )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Text(text = desc, color = GrayText, fontSize = 11.sp)
+        }
+        // Custom visual badge
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isGranted) RazorTeal.copy(alpha = 0.12f) else SafeGold.copy(alpha = 0.12f))
+                .border(1.dp, if (isGranted) RazorTeal.copy(alpha = 0.3f) else SafeGold.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = if (isGranted) "AUTHORIZED" else "PENDING",
+                color = if (isGranted) RazorTeal else SafeGold,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
         }
     }
 }
@@ -5848,8 +7005,8 @@ fun GridPostCard(
     }
     val isLocked = post.isPremium && !hasSubscription && post.creatorId != "pixel_queen"
 
-    var isLikedLocal by remember { mutableStateOf(false) }
-    var likesCountLocal by remember { mutableStateOf(post.likesCount) }
+    var isLikedLocal by remember(post.id, post.isLiked) { mutableStateOf(post.isLiked) }
+    var likesCountLocal by remember(post.id, post.likesCount) { mutableStateOf(post.likesCount) }
     var showCommentsDialog by remember { mutableStateOf(false) }
     var commentsCount by remember { mutableStateOf(3) }
 
@@ -6290,6 +7447,230 @@ fun CommentDialog(
                             tint = if (newCommentText.isNotBlank()) RazorTeal else GrayText,
                             modifier = Modifier.size(18.dp)
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// PREMIUM GOOGLE SEARCH TRENDING TOPICS COMPOSABLE (Jetpack Compose / M3)
+// =========================================================================
+@Composable
+fun TrendingTopicsCard(
+    topics: List<String>,
+    isFetching: Boolean,
+    selectedInsight: String?,
+    isGenerating: Boolean,
+    onTopicClick: (String) -> Unit,
+    onGenerateInsight: (String) -> Unit,
+    onClearInsight: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    var activeTopic by remember { mutableStateOf<String?>(null) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0x0EFFFFFF)),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Pulsing Search Dot
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(RazorTeal, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "LIVE GOOGLE SEARCH TRENDS",
+                        color = Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 11.sp,
+                        letterSpacing = 0.6.sp
+                    )
+                }
+                
+                IconButton(
+                    onClick = {
+                        onRefresh()
+                        activeTopic = null
+                        onClearInsight()
+                    },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Sync Search Tags",
+                        tint = RazorTeal.copy(alpha = 0.8f),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (isFetching) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        color = RazorBlue,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Fetching trends...", color = GrayText, fontSize = 11.sp)
+                }
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(topics) { topic ->
+                        val isSelected = activeTopic == topic
+                        val chipBg = if (isSelected) {
+                            Brush.linearGradient(colors = listOf(RazorBlue.copy(alpha = 0.3f), InstaPink.copy(alpha = 0.3f)))
+                        } else {
+                            Brush.linearGradient(colors = listOf(Color(0x13FFFFFF), Color(0x13FFFFFF)))
+                        }
+                        val chipBorderColor = if (isSelected) RazorBlue else Color.White.copy(alpha = 0.08f)
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(chipBg)
+                                .border(1.dp, chipBorderColor, RoundedCornerShape(12.dp))
+                                .clickable {
+                                    if (activeTopic == topic) {
+                                        activeTopic = null
+                                        onClearInsight()
+                                    } else {
+                                        activeTopic = topic
+                                        onGenerateInsight(topic)
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.TrendingUp,
+                                    contentDescription = null,
+                                    tint = if (isSelected) RazorTeal else RazorBlue,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = topic,
+                                    color = if (isSelected) Color.White else LightText,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Expanded Insight Panel powered by Gemini API based on google trends
+            if (activeTopic != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x0BFFFFFF))
+                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Lightbulb,
+                                    contentDescription = "Insights",
+                                    tint = SafeGold,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Google Search Insight: $activeTopic",
+                                    color = SafeGold,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+
+                            // Filter Feed Button
+                            TextButton(
+                                onClick = { onTopicClick(activeTopic!!) },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.height(24.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = "Search category",
+                                        tint = RazorTeal,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Filter Feed", color = RazorTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        if (isGenerating) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = RazorTeal,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Synching telemetry logs...",
+                                    color = GrayText,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        } else if (selectedInsight != null) {
+                            Text(
+                                text = selectedInsight,
+                                color = LightText,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
             }

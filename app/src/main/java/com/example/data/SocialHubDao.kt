@@ -25,6 +25,12 @@ interface SocialHubDao {
     @Query("SELECT * FROM posts ORDER BY timestamp DESC")
     fun getAllPosts(): Flow<List<Post>>
 
+    @Query("SELECT * FROM posts")
+    suspend fun getPostsList(): List<Post>
+
+    @Query("SELECT * FROM posts WHERE id = :id LIMIT 1")
+    suspend fun getPostById(id: Int): Post?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPost(post: Post)
 

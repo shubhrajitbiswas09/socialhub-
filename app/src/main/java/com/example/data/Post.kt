@@ -16,5 +16,6 @@ data class Post(
     val requiredTier: String = "FREE", // "FREE", "BRONZE", "SILVER", "GOLD"
     val likesCount: Int = 0,
     val tipsTotal: Double = 0.0,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isLiked: Boolean = false
 )

@@ -89,6 +89,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                     val likesCount = doc.getLong("likesCount")?.toInt() ?: 0
                     val tipsTotal = doc.getDouble("tipsTotal") ?: 0.0
                     val timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                    val isLiked = doc.getBoolean("isLiked") ?: false
 
                     Post(
                         id = id,
@@ -102,7 +103,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                         requiredTier = requiredTier,
                         likesCount = likesCount,
                         tipsTotal = tipsTotal,
-                        timestamp = timestamp
+                        timestamp = timestamp,
+                        isLiked = isLiked
                     )
                 } catch (e: Exception) {
                     null
@@ -110,7 +112,16 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
             }
 
             if (fetchedPosts.isNotEmpty()) {
-                dao.insertPosts(fetchedPosts)
+                val localPostsMap = dao.getPostsList().associateBy { it.id }
+                val mergedPosts = fetchedPosts.map { fetched ->
+                    val local = localPostsMap[fetched.id]
+                    if (local != null) {
+                        fetched.copy(isLiked = local.isLiked)
+                    } else {
+                        fetched
+                    }
+                }
+                dao.insertPosts(mergedPosts)
             }
 
             fetchedPosts.filter { it.creatorId in followedCreatorIds }
@@ -136,6 +147,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
         dao.insertPost(post)
         uploadPostToFirestore(post)
     }
+
+    suspend fun getPostById(id: Int): Post? = dao.getPostById(id)
     
     suspend fun updatePost(post: Post) {
         dao.updatePost(post)
