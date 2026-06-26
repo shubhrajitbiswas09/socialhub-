@@ -82,7 +82,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 val followedCreatorIds = creatorsList.filter { it.isFollowed }.map { it.id }.toSet()
                 repository.fetchFollowedPostsFromFirestore(followedCreatorIds)
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Sync error: ${e.message}")
             }
         }
     }
@@ -99,10 +99,63 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 triggerFirestoreSync()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Init sync error: ${e.message}")
             }
             delay(1200) // Aesthetic startup skeleton delay
             _isDataFetching.value = false
+        }
+
+        // Start background simulated real-time chat updates to make the app feel alive and interactive
+        viewModelScope.launch {
+            while (true) {
+                delay(15000) // Trigger an update every 15 seconds
+                try {
+                    val currentScr = _currentScreen.value
+                    val randomRoom = listOf("Alex Rivera", "Sarah Chen", "Tokyo Trip", "David Kim", "Elena Rodriguez").random()
+                    
+                    // If active screen is chat, we can prioritize sending messages to the active chat thread
+                    val targetRecipient = if (currentScr is Screen.Chat && currentScr.initialRecipient != null) {
+                        currentScr.initialRecipient
+                    } else {
+                        randomRoom
+                    }
+                    
+                    val simulatedSender = if (targetRecipient == "Tokyo Trip") {
+                        listOf("Alex Rivera", "Sarah Chen", "David Kim").random()
+                    } else {
+                        targetRecipient
+                    }
+                    
+                    val text = listOf(
+                        "Hey! Check out this newly updated real-time chat timeline! ⚡️",
+                        "Our secure keys were just rotated successfully! 🔑🔒",
+                        "Are you seeing these real-time notifications on your side?",
+                        "Just posted some exclusive photos on my Silver tier dashboard! 📸",
+                        "The latency is extremely low. Loving the modern M3 layout!",
+                        "Let's catch up later today at the workshop. ☕️"
+                    ).random()
+                    
+                    val encryptedText = if (_chatEncryptionEnabled.value) {
+                        android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.DEFAULT).trim()
+                    } else {
+                        text
+                    }
+                    
+                    val isSeenDirectly = (targetRecipient == activeChatRecipient)
+                    val autoMsg = ChatMessage(
+                        senderName = simulatedSender,
+                        receiverName = if (targetRecipient == "Tokyo Trip") "Tokyo Trip" else "You",
+                        encryptedContent = encryptedText,
+                        isEncrypted = _chatEncryptionEnabled.value,
+                        timestamp = System.currentTimeMillis(),
+                        isSeen = isSeenDirectly,
+                        isDelivered = true
+                    )
+                    repository.sendChatMessage(autoMsg)
+                } catch (e: Exception) {
+                    android.util.Log.e("SocialHub", "Simulate msg error: ${e.message}")
+                }
+            }
         }
     }
 
@@ -127,7 +180,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 val followedCreatorIds = creatorsList.filter { it.isFollowed }.map { it.id }.toSet()
                 repository.fetchFollowedPostsFromFirestore(followedCreatorIds)
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Refresh sync error: ${e.message}")
             }
             delay(1000) // Re-fetch from secure API node
             _isDataFetching.value = false
@@ -139,8 +192,24 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
         _chatEncryptionEnabled.value = !_chatEncryptionEnabled.value
     }
 
+    // Cryptographically secure payment generator (OWASP Mobile M5: Insufficient Cryptography)
+    private fun generateSecurePaymentId(prefix: String): String {
+        return try {
+            val bytes = ByteArray(6)
+            java.security.SecureRandom().nextBytes(bytes)
+            val hex = bytes.joinToString("") { String.format("%02x", it) }
+            "${prefix}_$hex"
+        } catch (e: Exception) {
+            "${prefix}_${System.currentTimeMillis().toString().takeLast(6)}"
+        }
+    }
+
     // Add Balance (Simulate Razorpay Top-up)
     fun addWalletFunds(amount: Double) {
+        if (amount <= 0.0 || !amount.isFinite() || amount > 100000.0) {
+            showNotification("Validation Failed", "Invalid deposit amount specified!")
+            return
+        }
         viewModelScope.launch {
             _walletBalance.value += amount
             val tx = Transaction(
@@ -150,7 +219,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 currency = "USD",
                 recipientHandle = "user_wallet",
                 status = "SUCCESS",
-                paymentId = "pay_fund_${UUID.randomUUID().toString().take(10)}"
+                paymentId = generateSecurePaymentId("pay_fund")
             )
             repository.insertTransaction(tx)
             showNotification("Success", "Deposited $${String.format("%.2f", amount)} successfully via Razorpay!")
@@ -188,7 +257,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 triggerFirestoreSync()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Follow sync error: ${e.message}")
             }
         }
     }
@@ -209,6 +278,10 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun executePostTip(post: Post, amount: Double) {
+        if (amount <= 0.0 || !amount.isFinite() || amount > 100000.0) {
+            showNotification("Validation Failed", "Invalid tipping amount specified!")
+            return
+        }
         if (_walletBalance.value < amount) {
             showNotification("Insufficient Funds", "Please load funds using Razorpay in your wallet first!")
             return
@@ -225,7 +298,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 currency = "USD",
                 recipientHandle = post.creatorHandle,
                 status = "SUCCESS",
-                paymentId = "pay_tip_${UUID.randomUUID().toString().take(10)}"
+                paymentId = generateSecurePaymentId("pay_tip")
             )
             repository.insertTransaction(tx)
             showNotification("Tip Sent", "Processed $${String.format("%.2f", amount)} securely with Razorpay!")
@@ -248,6 +321,10 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun executeSubscriptionBuy(creator: Creator, tier: String, price: Double) {
+        if (price <= 0.0 || !price.isFinite() || price > 100000.0) {
+            showNotification("Validation Failed", "Invalid subscription tier price!")
+            return
+        }
         if (_walletBalance.value < price) {
             showNotification("Payment Failed", "Wallet balance insufficient. Please deposit funds.")
             return
@@ -272,7 +349,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 currency = creator.currency,
                 recipientHandle = creator.handle,
                 status = "SUCCESS",
-                paymentId = "pay_sub_${UUID.randomUUID().toString().take(10)}"
+                paymentId = generateSecurePaymentId("pay_sub")
             )
             repository.insertTransaction(tx)
             showNotification("Subscription Active!", "Welcome to @${creator.handle}'s ${tier.uppercase()} tier!")
@@ -307,6 +384,10 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun executeTicketBuy(event: Event) {
+        if (event.ticketPrice <= 0.0 || !event.ticketPrice.isFinite() || event.ticketPrice > 100000.0) {
+            showNotification("Validation Failed", "Invalid ticket price!")
+            return
+        }
         if (_walletBalance.value < event.ticketPrice) {
             showNotification("Insufficient Wallet", "Deposit funds via Razorpay first.")
             return
@@ -323,7 +404,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 currency = event.currency,
                 recipientHandle = event.creatorHandle,
                 status = "SUCCESS",
-                paymentId = "pay_tkt_${UUID.randomUUID().toString().take(10)}"
+                paymentId = generateSecurePaymentId("pay_tkt")
             )
             repository.insertTransaction(tx)
             showNotification("Ticket Purchased 🎟️", "Your QR ticket code is now securely loaded!")
@@ -349,12 +430,76 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 timestamp = System.currentTimeMillis()
             )
             repository.sendChatMessage(msg)
+
+            // Real-time reply generation: simulate the typing and response of the recipient
+            delay(1500)
+            val replyText = when {
+                rawContent.contains("hello", ignoreCase = true) || rawContent.contains("hi", ignoreCase = true) -> {
+                    "Hello! Hope you're doing great. 🌟"
+                }
+                rawContent.contains("payment", ignoreCase = true) || rawContent.contains("pay", ignoreCase = true) || rawContent.contains("money", ignoreCase = true) -> {
+                    "Received the transaction notice. Thank you for split payment! 💸"
+                }
+                rawContent.contains("secure", ignoreCase = true) || rawContent.contains("encrypt", ignoreCase = true) || rawContent.contains("lock", ignoreCase = true) -> {
+                    "Yes, this Base64 cipher keeps our conversation fully private and decentralized. 🔒🔒"
+                }
+                else -> {
+                    listOf(
+                        "Got it, thanks for confirming!",
+                        "Perfect! That makes total sense.",
+                        "That sounds super cool. Tell me more!",
+                        "I am on it right now. Let me check the database log.",
+                        "Will do! Talk to you in a bit.",
+                        "That's awesome! Let's definitely do that."
+                    ).random()
+                }
+            }
+
+            val encryptedReply = if (_chatEncryptionEnabled.value) {
+                android.util.Base64.encodeToString(replyText.toByteArray(), android.util.Base64.DEFAULT).trim()
+            } else {
+                replyText
+            }
+
+            val replier = if (receiverHandle == "Tokyo Trip") {
+                listOf("Alex Rivera", "Sarah Chen", "David Kim").random()
+            } else {
+                receiverHandle
+            }
+
+            val replyMsg = ChatMessage(
+                senderName = replier,
+                receiverName = if (receiverHandle == "Tokyo Trip") "Tokyo Trip" else "You",
+                encryptedContent = encryptedReply,
+                isEncrypted = _chatEncryptionEnabled.value,
+                timestamp = System.currentTimeMillis(),
+                isSeen = true,
+                isDelivered = true
+            )
+            repository.sendChatMessage(replyMsg)
+        }
+    }
+
+    var activeChatRecipient: String? = null
+
+    fun markMessagesAsSeen(recipientName: String) {
+        if (recipientName.isEmpty()) {
+            activeChatRecipient = null
+            return
+        }
+        activeChatRecipient = recipientName
+        viewModelScope.launch {
+            if (recipientName == "Tokyo Trip") {
+                repository.markMessagesAsSeenForGroup("Tokyo Trip")
+            } else {
+                repository.markMessagesAsSeenForSender(recipientName)
+            }
         }
     }
 
     // Pay requested invoice in encrypted chat
     fun payChatInvoice(chat: ChatMessage) {
-        if (chat.amountRequested <= 0) return
+        if (chat.amountRequested <= 0.0 || !chat.amountRequested.isFinite() || chat.amountRequested > 100000.0) return
         if (_walletBalance.value < chat.amountRequested) {
             showNotification("Payment Declined", "Insufficient funds. Please fund your wallet.")
             return
@@ -369,7 +514,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                 currency = "USD",
                 recipientHandle = chat.senderName,
                 status = "SUCCESS",
-                paymentId = "pay_inv_${UUID.randomUUID().toString().take(10)}"
+                paymentId = generateSecurePaymentId("pay_inv")
             )
             repository.insertTransaction(tx)
             // Update chat status in Database
@@ -410,7 +555,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 triggerFirestoreSync()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Publish post sync error: ${e.message}")
             }
         }
     }
@@ -479,7 +624,7 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Trend fetch failed: ${e.message}")
                 // Graceful fallback is already active with default lists
             } finally {
                 _isTrendingFetching.value = false
@@ -514,10 +659,118 @@ class SocialHubViewModel(application: Application) : AndroidViewModel(applicatio
                     _selectedTopicInsight.value = text ?: "Trending globally today with massive daily search interest!"
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("SocialHub", "Insight generation failed: ${e.message}")
                 _selectedTopicInsight.value = "Unable to fetch search insights right now. Please try again soon."
             } finally {
                 _isGeneratingInsight.value = false
+            }
+        }
+    }
+
+    // --- Verification & Tier Setup States ---
+    private val _userVerified = MutableStateFlow(false)
+    val userVerified: StateFlow<Boolean> = _userVerified.asStateFlow()
+
+    private val _userBronzeName = MutableStateFlow("Bronze Watcher")
+    val userBronzeName = _userBronzeName.asStateFlow()
+    private val _userBronzePrice = MutableStateFlow(4.99)
+    val userBronzePrice = _userBronzePrice.asStateFlow()
+    private val _userBronzePerks = MutableStateFlow("Latest daily stock alerts & tech watchlists.")
+    val userBronzePerks = _userBronzePerks.asStateFlow()
+
+    private val _userSilverName = MutableStateFlow("Silver Analyst")
+    val userSilverName = _userSilverName.asStateFlow()
+    private val _userSilverPrice = MutableStateFlow(14.99)
+    val userSilverPrice = _userSilverPrice.asStateFlow()
+    private val _userSilverPerks = MutableStateFlow("Exclusive audio transcripts & deep portfolio wiring sheets.")
+    val userSilverPerks = _userSilverPerks.asStateFlow()
+
+    private val _userGoldName = MutableStateFlow("Gold Partner")
+    val userGoldName = _userGoldName.asStateFlow()
+    private val _userGoldPrice = MutableStateFlow(49.99)
+    val userGoldPrice = _userGoldPrice.asStateFlow()
+    private val _userGoldPerks = MutableStateFlow("Weekly 1-on-1 portfolio review on secure live rooms.")
+    val userGoldPerks = _userGoldPerks.asStateFlow()
+
+    fun verifyUser() {
+        _userVerified.value = true
+        showNotification("Verification Passed", "Congratulations! Profile verified securely on ledger.")
+    }
+
+    fun unverifyUser() {
+        _userVerified.value = false
+        showNotification("Verification Revoked", "Identity verification retracted successfully.")
+    }
+
+    fun updateUserTiers(
+        bName: String, bPrice: Double, bPerks: String,
+        sName: String, sPrice: Double, sPerks: String,
+        gName: String, gPrice: Double, gPerks: String
+    ) {
+        _userBronzeName.value = bName
+        _userBronzePrice.value = bPrice
+        _userBronzePerks.value = bPerks
+        _userSilverName.value = sName
+        _userSilverPrice.value = sPrice
+        _userSilverPerks.value = sPerks
+        _userGoldName.value = gName
+        _userGoldPrice.value = gPrice
+        _userGoldPerks.value = gPerks
+        showNotification("Tiers Updated", "Your customized creator tiers are saved securely.")
+    }
+
+    fun verifyCreator(creatorId: String, isVerified: Boolean) {
+        viewModelScope.launch {
+            try {
+                val creatorsList = repository.creators.first()
+                val creator = creatorsList.find { it.id == creatorId }
+                if (creator != null) {
+                    val updated = creator.copy(isVerified = isVerified)
+                    repository.updateCreator(updated)
+                    showNotification(
+                        if (isVerified) "Creator Verified" else "Creator Unverified",
+                        "@${creator.handle} verification status has been updated."
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SocialHub", "Verification update error: ${e.message}")
+            }
+        }
+    }
+
+    fun updateCreatorTiers(
+        creatorId: String,
+        bronzeName: String,
+        bronzePrice: Double,
+        bronzePerks: String,
+        silverName: String,
+        silverPrice: Double,
+        silverPerks: String,
+        goldName: String,
+        goldPrice: Double,
+        goldPerks: String
+    ) {
+        viewModelScope.launch {
+            try {
+                val creatorsList = repository.creators.first()
+                val creator = creatorsList.find { it.id == creatorId }
+                if (creator != null) {
+                    val updated = creator.copy(
+                        bronzeTierName = bronzeName,
+                        bronzeTierPrice = bronzePrice,
+                        bronzeTierPerks = bronzePerks,
+                        silverTierName = silverName,
+                        silverTierPrice = silverPrice,
+                        silverTierPerks = silverPerks,
+                        goldTierName = goldName,
+                        goldTierPrice = goldPrice,
+                        goldTierPerks = goldPerks
+                    )
+                    repository.updateCreator(updated)
+                    showNotification("Tiers Updated", "Subscription pricing and tiers updated for @${creator.handle} on local ledger.")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SocialHub", "Tiers update error: ${e.message}")
             }
         }
     }

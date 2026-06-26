@@ -35,7 +35,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
             }
             FirebaseFirestore.getInstance()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("SocialHubRepo", "Firestore init failed: ${e.message}")
             null
         }
     }
@@ -63,7 +63,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 .set(docData)
                 .awaitResult()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("SocialHubRepo", "Firestore upload failed: ${e.message}")
         }
     }
 
@@ -126,7 +126,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
 
             fetchedPosts.filter { it.creatorId in followedCreatorIds }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("SocialHubRepo", "Fetch followed posts failed: ${e.message}")
             emptyList()
         }
     }
@@ -167,6 +167,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
 
     suspend fun sendChatMessage(message: ChatMessage) = dao.insertChatMessage(message)
     suspend fun updateChatMessage(message: ChatMessage) = dao.updateChatMessage(message)
+    suspend fun markMessagesAsSeenForSender(senderName: String) = dao.markMessagesAsSeenForSender(senderName)
+    suspend fun markMessagesAsSeenForGroup(receiverName: String) = dao.markMessagesAsSeenForGroup(receiverName)
 
     suspend fun buyTicket(eventId: Int, event: Event) {
         dao.updateEvent(event.copy(ticketsBought = event.ticketsBought + 1))
@@ -197,7 +199,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 bronzeTierPrice = 5.00,
                 silverTierPrice = 25.00,
                 goldTierPrice = 99.00,
-                isVerified = true,
+                isVerified = false,
                 isFollowed = true
             ),
             Creator(
@@ -223,7 +225,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 bronzeTierPrice = 2.99,
                 silverTierPrice = 9.99,
                 goldTierPrice = 24.99,
-                isVerified = true,
+                isVerified = false,
                 isFollowed = true
             )
         )
@@ -285,7 +287,7 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
         try {
             listPosts.forEach { uploadPostToFirestore(it) }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("SocialHubRepo", "Populate and upload initial posts failed: ${e.message}")
         }
 
         val listEvents = listOf(
@@ -326,7 +328,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 receiverName = "You",
                 encryptedContent = "R290IHRoZSB0cmFuc2ZlciwgdGhhbmtzIGZvciBzZW5kaW5nIGl0IHNvIGZhc3Qh", // Base64 for "Got the transfer, thanks..."
                 isEncrypted = true,
-                timestamp = System.currentTimeMillis() - 7200000
+                timestamp = System.currentTimeMillis() - 7200000,
+                isSeen = true
             ),
             ChatMessage(
                 id = 2,
@@ -334,7 +337,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 receiverName = "You",
                 encryptedContent = "Are we still meeting at 5 for coffee downtown? Let me know, I'm heading out soon! ☕️",
                 isEncrypted = false,
-                timestamp = System.currentTimeMillis() - 3600000
+                timestamp = System.currentTimeMillis() - 3600000,
+                isSeen = false
             ),
             ChatMessage(
                 id = 3,
@@ -342,7 +346,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 receiverName = "You",
                 encryptedContent = "QG1paGU6IHNlY3VyZSBrZXkgdXBkYXRlZCBmb3IgdGhlIEVUSEVyZWXVbSBtYWlubmV0IHZhdWx0Lg==", // Base64 for "@mihe: secure key updated..."
                 isEncrypted = true,
-                timestamp = System.currentTimeMillis() - 120000
+                timestamp = System.currentTimeMillis() - 120000,
+                isSeen = true
             ),
             ChatMessage(
                 id = 4,
@@ -354,7 +359,8 @@ class SocialHubRepository(private val dao: SocialHubDao, private val context: Co
                 amountRequested = 45.00,
                 payRefId = "pay_dinner_ref_001",
                 paymentStatus = "NONE",
-                timestamp = System.currentTimeMillis() - 1700000
+                timestamp = System.currentTimeMillis() - 1700000,
+                isSeen = true
             )
         )
         for (chat in seedChats) {

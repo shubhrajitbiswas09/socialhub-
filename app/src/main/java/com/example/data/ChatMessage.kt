@@ -14,5 +14,7 @@ data class ChatMessage(
     val amountRequested: Double = 0.0,
     val payRefId: String? = null, // Pay reference for chat tipping
     val paymentStatus: String = "NONE", // "NONE", "PAID", "DECLINED"
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isSeen: Boolean = false,
+    val isDelivered: Boolean = true
 )

@@ -67,6 +67,12 @@ interface SocialHubDao {
     @Update
     suspend fun updateChatMessage(message: ChatMessage)
 
+    @Query("UPDATE chat_messages SET isSeen = 1 WHERE senderName = :senderName AND receiverName = 'You' AND isSeen = 0")
+    suspend fun markMessagesAsSeenForSender(senderName: String)
+
+    @Query("UPDATE chat_messages SET isSeen = 1 WHERE receiverName = :receiverName AND senderName != 'You' AND isSeen = 0")
+    suspend fun markMessagesAsSeenForGroup(receiverName: String)
+
     // === Events ===
     @Query("SELECT * FROM events")
     fun getAllEvents(): Flow<List<Event>>

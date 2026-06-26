@@ -16,5 +16,14 @@ data class Creator(
     val goldTierPrice: Double,
     val isVerified: Boolean = true,
     val currency: String = "USD",
-    val isFollowed: Boolean = false
+    val isFollowed: Boolean = false,
+    
+    // Customizable Tier Perks & Names for Verified Creators
+    val bronzeTierName: String = "Bronze Watcher",
+    val bronzeTierPerks: String = "Latest daily stock alerts & tech watchlists.",
+    val silverTierName: String = "Silver Analyst",
+    val silverTierPerks: String = "Exclusive audio transcripts & deep portfolio wiring sheets.",
+    val goldTierName: String = "Gold Partner",
+    val goldTierPerks: String = "Weekly 1-on-1 portfolio review on secure live rooms."
 )
+
