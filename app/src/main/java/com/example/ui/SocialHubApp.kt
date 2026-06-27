@@ -2798,20 +2798,6 @@ fun PostCard(
                 var controlTimerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
                 var isBuffering by remember { mutableStateOf(false) }
 
-                DisposableEffect(isInViewport) {
-                    onDispose {
-                        if (!isInViewport) {
-                            // Explicitly dispose of video elements, active players, object URLs, and buffers
-                            controlTimerJob?.cancel()
-                            controlTimerJob = null
-                            isBuffering = false
-                            isPlayingInline = false
-                            // Release any media decoder textures and cached references to minimize browser memory footprint
-                            android.util.Log.d("VideoCleanup", "Explicitly disposed of video elements, buffers, and object URLs to optimize memory footprint.")
-                        }
-                    }
-                }
-
                 LaunchedEffect(isActiveVideo, isInViewport) {
                     if (!isInViewport) {
                         isPlayingInline = false
