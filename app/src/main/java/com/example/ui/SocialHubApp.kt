@@ -251,23 +251,27 @@ fun SocialHubApp(viewModel: SocialHubViewModel) {
     var marioPizzaSplitPaid by remember { mutableStateOf(false) }
     var activeInAppVideoPost by remember { mutableStateOf<Post?>(null) }
 
-    val filteredPosts = if (headerSearchQuery.isBlank()) {
-        followedPosts
-    } else {
-        followedPosts.filter {
-            it.caption.contains(headerSearchQuery, ignoreCase = true) ||
-            it.creatorName.contains(headerSearchQuery, ignoreCase = true) ||
-            it.creatorHandle.contains(headerSearchQuery, ignoreCase = true)
+    val filteredPosts = remember(followedPosts, headerSearchQuery) {
+        if (headerSearchQuery.isBlank()) {
+            followedPosts
+        } else {
+            followedPosts.filter {
+                it.caption.contains(headerSearchQuery, ignoreCase = true) ||
+                it.creatorName.contains(headerSearchQuery, ignoreCase = true) ||
+                it.creatorHandle.contains(headerSearchQuery, ignoreCase = true)
+            }
         }
     }
 
-    val filteredCreators = if (headerSearchQuery.isBlank()) {
-        creators
-    } else {
-        creators.filter {
-            it.name.contains(headerSearchQuery, ignoreCase = true) ||
-            it.handle.contains(headerSearchQuery, ignoreCase = true) ||
-            it.description.contains(headerSearchQuery, ignoreCase = true)
+    val filteredCreators = remember(creators, headerSearchQuery) {
+        if (headerSearchQuery.isBlank()) {
+            creators
+        } else {
+            creators.filter {
+                it.name.contains(headerSearchQuery, ignoreCase = true) ||
+                it.handle.contains(headerSearchQuery, ignoreCase = true) ||
+                it.description.contains(headerSearchQuery, ignoreCase = true)
+            }
         }
     }
 
@@ -533,22 +537,24 @@ fun SocialHubApp(viewModel: SocialHubViewModel) {
                                 if (isDataFetching) {
                                     FeedScreenSkeleton()
                                 } else {
-                                    FeedScreen(
-                                        posts = filteredPosts,
-                                        creators = creators,
-                                        subscriptions = subscriptions,
-                                        onLike = { viewModel.likePost(it) },
-                                        onTip = { post, amt -> viewModel.triggerPostTip(post, amt) },
-                                        onUnlock = { creatorId ->
-                                            viewModel.navigateTo(Screen.CreatorDetail(creatorId))
-                                        },
-                                        onPublishPost = { caption, creator, attachedMediaType -> viewModel.publishPost(caption, creator, attachedMediaType) },
-                                        onDiscoverCreators = { viewModel.navigateTo(Screen.Creators) },
-                                        onCreatorClick = { creatorId ->
-                                            viewModel.navigateTo(Screen.CreatorDetail(creatorId))
-                                        },
-                                        onVideoClick = { activeInAppVideoPost = it }
-                                    )
+                                    FeedErrorBoundary(onReset = { viewModel.triggerRefresh() }) {
+                                        FeedScreen(
+                                            posts = filteredPosts,
+                                            creators = creators,
+                                            subscriptions = subscriptions,
+                                            onLike = { viewModel.likePost(it) },
+                                            onTip = { post, amt -> viewModel.triggerPostTip(post, amt) },
+                                            onUnlock = { creatorId ->
+                                                viewModel.navigateTo(Screen.CreatorDetail(creatorId))
+                                            },
+                                            onPublishPost = { caption, creator, attachedMediaType -> viewModel.publishPost(caption, creator, attachedMediaType) },
+                                            onDiscoverCreators = { viewModel.navigateTo(Screen.Creators) },
+                                            onCreatorClick = { creatorId ->
+                                                viewModel.navigateTo(Screen.CreatorDetail(creatorId))
+                                            },
+                                            onVideoClick = { activeInAppVideoPost = it }
+                                        )
+                                    }
                                 }
                             }
                             is Screen.Creators -> {
@@ -928,6 +934,35 @@ fun FeedScreen(
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
+    // Fully optimized and memoized stream items to completely prevent any scrolling lag
+    val streamItems = remember(posts, dismissedAds.size) {
+        val userVideos = posts.filter { it.contentImage == "attached_video" && it.id >= 0 }
+        val combinedVideos = userVideos + defaultVideos
+        combinedVideos.flatMapIndexed { index, post ->
+            val items = mutableListOf<StreamItem>()
+            items.add(StreamItem.VideoPost(post))
+            val videoIndex = index + 1
+            if (videoIndex % 5 == 0) {
+                val adIndex = (videoIndex / 5) - 1
+                val ad = sampleAds[adIndex % sampleAds.size]
+                if (!dismissedAds.contains(ad.id)) {
+                    items.add(
+                        StreamItem.Advertisement(
+                            id = ad.id,
+                            sponsorName = ad.sponsorName,
+                            sponsorAvatar = ad.sponsorAvatar,
+                            caption = ad.caption,
+                            imageUrl = ad.imageUrl,
+                            ctaText = ad.ctaText,
+                            url = ad.url
+                        )
+                    )
+                }
+            }
+            items
+        }
+    }
+
     val activeVideoIdState = remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
@@ -935,15 +970,23 @@ fun FeedScreen(
             if (visibleItems.isEmpty()) null
             else {
                 val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-                val videoItems = visibleItems.filter { it.key.toString().startsWith("video_") }
-                if (videoItems.isEmpty()) null
-                else {
-                    val closest = videoItems.minByOrNull { item ->
+                var closestId: Int? = null
+                var minDistance = Int.MAX_VALUE
+                for (item in visibleItems) {
+                    val keyStr = item.key as? String ?: continue
+                    if (keyStr.startsWith("video_")) {
                         val itemCenter = item.offset + item.size / 2
-                        kotlin.math.abs(itemCenter - viewportCenter)
+                        val dist = kotlin.math.abs(itemCenter - viewportCenter)
+                        if (dist < minDistance) {
+                            val id = keyStr.substring(6).toIntOrNull()
+                            if (id != null) {
+                                minDistance = dist
+                                closestId = id
+                            }
+                        }
                     }
-                    closest?.key?.toString()?.substringAfter("video_")?.toIntOrNull()
                 }
+                closestId
             }
         }
     }
@@ -951,10 +994,18 @@ fun FeedScreen(
     val visibleVideoIdsState = remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
-            layoutInfo.visibleItemsInfo
-                .filter { it.key.toString().startsWith("video_") }
-                .mapNotNull { it.key.toString().substringAfter("video_").toIntOrNull() }
-                .toSet()
+            val visibleItems = layoutInfo.visibleItemsInfo
+            val ids = mutableSetOf<Int>()
+            for (item in visibleItems) {
+                val keyStr = item.key as? String ?: continue
+                if (keyStr.startsWith("video_")) {
+                    val id = keyStr.substring(6).toIntOrNull()
+                    if (id != null) {
+                        ids.add(id)
+                    }
+                }
+            }
+            ids
         }
     }
 
@@ -1378,32 +1429,6 @@ fun FeedScreen(
                         )
                     }
                 } else {
-                    val userVideos = posts.filter { it.contentImage == "attached_video" && it.id >= 0 }
-                    val combinedVideos = userVideos + defaultVideos
-                    val streamItems = combinedVideos.flatMapIndexed { index, post ->
-                        val items = mutableListOf<StreamItem>()
-                        items.add(StreamItem.VideoPost(post))
-                        val videoIndex = index + 1
-                        if (videoIndex % 5 == 0) {
-                            val adIndex = (videoIndex / 5) - 1
-                            val ad = sampleAds[adIndex % sampleAds.size]
-                            if (!dismissedAds.contains(ad.id)) {
-                                items.add(
-                                    StreamItem.Advertisement(
-                                        id = ad.id,
-                                        sponsorName = ad.sponsorName,
-                                        sponsorAvatar = ad.sponsorAvatar,
-                                        caption = ad.caption,
-                                        imageUrl = ad.imageUrl,
-                                        ctaText = ad.ctaText,
-                                        url = ad.url
-                                    )
-                                )
-                            }
-                        }
-                        items
-                    }
-
                     items(streamItems, key = { item ->
                         when (item) {
                             is StreamItem.VideoPost -> "video_${item.post.id}"
@@ -8046,6 +8071,93 @@ fun ShimmerBox(
             .clip(shape)
             .background(rememberShimmerBrushValue())
     )
+}
+
+@Composable
+fun FeedErrorBoundary(
+    onReset: () -> Unit = {},
+    content: @Composable () -> Unit
+) {
+    var errorState by remember { mutableStateOf<Throwable?>(null) }
+
+    if (errorState != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(ObsidianDark)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .background(RazorBlue.copy(alpha = 0.15f), CircleShape)
+                        .border(2.dp, RazorBlue, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Error Boundary Warning",
+                        tint = RazorBlue,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    text = "Feed Render Error Boundary",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "We recovered safely from a component crash in the core feed.",
+                    fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.3f))
+                ) {
+                    Text(
+                        text = errorState?.localizedMessage ?: errorState?.toString() ?: "Unknown layout exception.",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = InstaPink,
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = {
+                        onReset()
+                        errorState = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RazorBlue),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(48.dp)
+                ) {
+                    Text("RECOVER FEED RENDERING", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                }
+            }
+        }
+    } else {
+        content()
+    }
 }
 
 @Composable
