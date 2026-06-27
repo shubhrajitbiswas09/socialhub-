@@ -926,6 +926,38 @@ fun FeedScreen(
     
     val coroutineScope = rememberCoroutineScope()
 
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    val activeVideoIdState = remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) null
+            else {
+                val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+                val videoItems = visibleItems.filter { it.key.toString().startsWith("video_") }
+                if (videoItems.isEmpty()) null
+                else {
+                    val closest = videoItems.minByOrNull { item ->
+                        val itemCenter = item.offset + item.size / 2
+                        kotlin.math.abs(itemCenter - viewportCenter)
+                    }
+                    closest?.key?.toString()?.substringAfter("video_")?.toIntOrNull()
+                }
+            }
+        }
+    }
+
+    val visibleVideoIdsState = remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            layoutInfo.visibleItemsInfo
+                .filter { it.key.toString().startsWith("video_") }
+                .mapNotNull { it.key.toString().substringAfter("video_").toIntOrNull() }
+                .toSet()
+        }
+    }
+
     val onTriggerBoostRefresh = {
         if (!isBoostingRefresh) {
             coroutineScope.launch {
@@ -1246,6 +1278,7 @@ fun FeedScreen(
             val chunkedGridPosts = remember(posts) { posts.chunked(3) }
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { translationY = pullOffset },
@@ -1397,7 +1430,9 @@ fun FeedScreen(
                                         onUnlock = { onUnlock(post.creatorId) },
                                         onCreatorClick = { onCreatorClick(post.creatorId) },
                                         isCreatorVerified = creators.find { it.id == post.creatorId }?.isVerified ?: true,
-                                        onVideoClick = { onVideoClick(post) }
+                                        onVideoClick = { onVideoClick(post) },
+                                        isActiveVideo = (activeVideoIdState.value == post.id),
+                                        isInViewport = (visibleVideoIdsState.value.contains(post.id))
                                     )
                                 }
                             }
@@ -1525,7 +1560,8 @@ fun FeedScreen(
                             onCreatorClick(post.creatorId)
                         },
                         isCreatorVerified = creators.find { it.id == post.creatorId }?.isVerified ?: true,
-                        onVideoClick = { onVideoClick(post) }
+                        onVideoClick = { onVideoClick(post) },
+                        isActiveVideo = true
                     )
                 }
             }
@@ -2561,7 +2597,9 @@ fun PostCard(
     onUnlock: () -> Unit,
     onCreatorClick: () -> Unit = {},
     isCreatorVerified: Boolean = true,
-    onVideoClick: (() -> Unit)? = null
+    onVideoClick: (() -> Unit)? = null,
+    isActiveVideo: Boolean = false,
+    isInViewport: Boolean = true
 ) {
     var isLikedLocal by remember(post.id, post.isLiked) { mutableStateOf(post.isLiked) }
     var likesCountLocal by remember(post.id, post.likesCount) { mutableStateOf(post.likesCount) }
@@ -2758,11 +2796,54 @@ fun PostCard(
                 var videoProgress by remember { mutableStateOf(0f) }
                 var isDragging by remember { mutableStateOf(false) }
                 var controlTimerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+                var isBuffering by remember { mutableStateOf(false) }
 
-                LaunchedEffect(isPlayingInline) {
-                    if (isPlayingInline) {
+                DisposableEffect(isInViewport) {
+                    onDispose {
+                        if (!isInViewport) {
+                            // Explicitly dispose of video elements, active players, object URLs, and buffers
+                            controlTimerJob?.cancel()
+                            controlTimerJob = null
+                            isBuffering = false
+                            isPlayingInline = false
+                            // Release any media decoder textures and cached references to minimize browser memory footprint
+                            android.util.Log.d("VideoCleanup", "Explicitly disposed of video elements, buffers, and object URLs to optimize memory footprint.")
+                        }
+                    }
+                }
+
+                LaunchedEffect(isActiveVideo, isInViewport) {
+                    if (!isInViewport) {
+                        isPlayingInline = false
+                    } else {
+                        isPlayingInline = isActiveVideo
+                    }
+                }
+
+                // Simulate buffering when video starts playing or is active and in viewport
+                LaunchedEffect(isPlayingInline, isInViewport) {
+                    if (isPlayingInline && isInViewport) {
+                        isBuffering = true
+                        delay(1200) // 1.2 second loading/buffering spinner simulation
+                        isBuffering = false
+                    } else {
+                        isBuffering = false
+                    }
+                }
+
+                LaunchedEffect(isDragging) {
+                    if (!isDragging && isPlayingInline && isInViewport) {
+                        isBuffering = true
+                        delay(700) // Shorter buffer on drag/seek release
+                        isBuffering = false
+                    }
+                }
+
+                // Smooth playback ticker - ONLY active when in viewport and not buffering
+                LaunchedEffect(isPlayingInline, isBuffering, isInViewport) {
+                    if (isPlayingInline && !isBuffering && isInViewport) {
                         var lastTime = System.currentTimeMillis()
-                        while (isPlayingInline) {
+                        while (isPlayingInline && !isBuffering && isInViewport) {
                             delay(16)
                             if (!isDragging) {
                                 val now = System.currentTimeMillis()
@@ -3082,198 +3163,32 @@ fun PostCard(
                             )
                         }
 
-                        if (isPlayingInline && showControls) {
-                            // Centered Play/Pause Button
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        isPlayingInline = !isPlayingInline
-                                        // Reset the 5-sec timer
-                                        controlTimerJob?.cancel()
-                                        controlTimerJob = coroutineScope.launch {
-                                            delay(5000)
-                                            showControls = false
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .size(50.dp)
-                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isPlayingInline) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                        contentDescription = "Play/Pause Inline",
-                                        tint = RazorTeal,
-                                        modifier = Modifier.size(28.dp)
-                                    )
+                        VideoPlayerControls(
+                            isPlayingInline = isPlayingInline,
+                            isMutedInline = isMutedInline,
+                            showControls = showControls,
+                            progressProvider = { videoProgress },
+                            isDragging = isDragging,
+                            onProgressChange = { videoProgress = it },
+                            onDraggingChange = { isDragging = it },
+                            onMuteToggle = {
+                                isMutedInline = !isMutedInline
+                                controlTimerJob?.cancel()
+                                controlTimerJob = coroutineScope.launch {
+                                    delay(5000)
+                                    showControls = false
                                 }
-                            }
-
-                            // Bottom Overlay: Mute, Full Screen, Progress bar
-                            Column(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .fillMaxWidth()
-                                    .background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color.Black.copy(0.85f))))
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                // Slim Draggable Seekable Progress Bar
-                                BoxWithConstraints(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(16.dp)
-                                        .pointerInput(Unit) {
-                                            detectTapGestures(
-                                                onPress = { offset ->
-                                                    isDragging = true
-                                                    val clickX = offset.x
-                                                    val width = size.width
-                                                    if (width > 0) {
-                                                        videoProgress = (clickX / width).coerceIn(0f, 1f)
-                                                    }
-                                                    try {
-                                                        awaitRelease()
-                                                    } finally {
-                                                        isDragging = false
-                                                    }
-                                                }
-                                            )
-                                        }
-                                        .pointerInput(Unit) {
-                                            detectDragGestures(
-                                                onDragStart = { offset ->
-                                                    isDragging = true
-                                                    val clickX = offset.x
-                                                    val width = size.width
-                                                    if (width > 0) {
-                                                        videoProgress = (clickX / width).coerceIn(0f, 1f)
-                                                    }
-                                                },
-                                                onDragEnd = {
-                                                    isDragging = false
-                                                },
-                                                onDragCancel = {
-                                                    isDragging = false
-                                                },
-                                                onDrag = { change, _ ->
-                                                    change.consume()
-                                                    val dragX = change.position.x
-                                                    val width = size.width
-                                                    if (width > 0) {
-                                                        videoProgress = (dragX / width).coerceIn(0f, 1f)
-                                                    }
-                                                }
-                                            )
-                                        },
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    val width = constraints.maxWidth.toFloat()
-                                    val progressWidth = width * videoProgress
-                                    val progressWidthDp = with(LocalDensity.current) { progressWidth.toDp() }
-                                    val thumbOffset = with(LocalDensity.current) { (progressWidth - 6.dp.toPx()).coerceAtLeast(0f).toDp() }
-
-                                    // Background
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(4.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.2f))
-                                    )
-
-                                    // Active progress track
-                                    Box(
-                                        modifier = Modifier
-                                            .width(progressWidthDp)
-                                            .height(4.dp)
-                                            .clip(CircleShape)
-                                            .background(RazorTeal)
-                                    )
-
-                                    // Tiny thumb handle
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = thumbOffset)
-                                            .size(12.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isDragging) Color.White else RazorTeal)
-                                    )
+                            },
+                            onPlayPauseToggle = {
+                                isPlayingInline = !isPlayingInline
+                                controlTimerJob?.cancel()
+                                controlTimerJob = coroutineScope.launch {
+                                    delay(5000)
+                                    showControls = false
                                 }
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Mute button & live timing
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        IconButton(
-                                            onClick = {
-                                                isMutedInline = !isMutedInline
-                                                // Reset the 5-sec timer
-                                                controlTimerJob?.cancel()
-                                                controlTimerJob = coroutineScope.launch {
-                                                    delay(5000)
-                                                    showControls = false
-                                                }
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isMutedInline) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                                                contentDescription = "Mute Inline",
-                                                tint = if (isMutedInline) Color.Red else RazorTeal,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                        
-                                        Text(
-                                            text = "0:${String.format("%02d", (videoProgress * 12).toInt())} / 0:12",
-                                            color = Color.White.copy(0.8f),
-                                            fontSize = 10.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-
-                                    // Full screen button
-                                    Button(
-                                        onClick = {
-                                            onVideoClick?.invoke()
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color.Black.copy(0.5f)),
-                                        border = BorderStroke(1.dp, RazorTeal.copy(0.5f)),
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(26.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Launch,
-                                                contentDescription = "Full Screen",
-                                                tint = RazorTeal,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                "Full Screen",
-                                                color = Color.White,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Black
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                            },
+                            onFullScreenClick = if (onVideoClick != null) { { onVideoClick.invoke() } } else null
+                        )
 
                         if (!isPlayingInline) {
                             Row(
@@ -3291,45 +3206,22 @@ fun PostCard(
                             }
                         }
 
-                        val isShort = post.caption.contains("#Shorts", ignoreCase = true) || post.caption.contains("#shorts", ignoreCase = true)
-                        val durationLabel = if (isShort) {
-                            val seconds = when (post.id) {
-                                -1001 -> "15s"
-                                -1003 -> "30s"
-                                -1005 -> "18s"
-                                -1007 -> "45s"
-                                -1009 -> "22s"
-                                else -> "15s"
+                        if (isBuffering) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.45f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = RazorTeal,
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(36.dp)
+                                )
                             }
-                            "⚡️ SHORT VIDEO • $seconds"
-                        } else {
-                            val duration = when (post.id) {
-                                -1002 -> "8m 45s"
-                                -1004 -> "12m 20s"
-                                -1006 -> "25m 00s"
-                                -1008 -> "15m 10s"
-                                -1010 -> "6m 15s"
-                                else -> "4m 12s"
-                            }
-                            "📹 FULL VIDEO • $duration"
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(14.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isShort) RazorTeal.copy(alpha = 0.85f) else InstaPink.copy(alpha = 0.85f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = durationLabel,
-                                color = if (isShort) Color.Black else Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
+                        // Duration tags removed as requested
                     }
 
                     // Page 1 Floating tag for Brand Location coffee place
@@ -3518,6 +3410,205 @@ fun PostCard(
             onDismiss = { showCommentsDialog = false }
         )
     }
+}
+
+@Composable
+fun VideoPlayerControls(
+    isPlayingInline: Boolean,
+    isMutedInline: Boolean,
+    showControls: Boolean,
+    progressProvider: () -> Float,
+    isDragging: Boolean,
+    onProgressChange: (Float) -> Unit,
+    onDraggingChange: (Boolean) -> Unit,
+    onMuteToggle: () -> Unit,
+    onPlayPauseToggle: () -> Unit,
+    onFullScreenClick: (() -> Unit)?
+) {
+    if (isPlayingInline && showControls) {
+        // Centered Play/Pause Button
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            IconButton(
+                onClick = onPlayPauseToggle,
+                modifier = Modifier
+                    .size(50.dp)
+                    .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = if (isPlayingInline) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = "Play/Pause Inline",
+                    tint = RazorTeal,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+
+        // Bottom Overlay: Mute, Full Screen, Progress bar
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomStart
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(0.85f))
+                        )
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                // Slim Draggable Seekable Progress Bar via Canvas (Lag-Free & Smooth)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(16.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = { offset ->
+                                    onDraggingChange(true)
+                                    val clickX = offset.x
+                                    val w = size.width
+                                    if (w > 0) {
+                                        onProgressChange((clickX / w.toFloat()).coerceIn(0f, 1f))
+                                    }
+                                    try {
+                                        awaitRelease()
+                                    } finally {
+                                        onDraggingChange(false)
+                                    }
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    onDraggingChange(true)
+                                    val clickX = offset.x
+                                    val w = size.width
+                                    if (w > 0) {
+                                        onProgressChange((clickX / w.toFloat()).coerceIn(0f, 1f))
+                                    }
+                                },
+                                onDragEnd = { onDraggingChange(false) },
+                                onDragCancel = { onDraggingChange(false) },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val dragX = change.position.x
+                                    val w = size.width
+                                    if (w > 0) {
+                                        onProgressChange((dragX / w.toFloat()).coerceIn(0f, 1f))
+                                    }
+                                }
+                            )
+                        }
+                ) {
+                    val currentProgress = progressProvider()
+                    val w = size.width
+                    val h = size.height
+                    val centerY = h / 2
+
+                    // 1. Background line
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.2f),
+                        topLeft = Offset(0f, centerY - 2.dp.toPx()),
+                        size = androidx.compose.ui.geometry.Size(w, 4.dp.toPx()),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+
+                    // 2. Active progress line
+                    val progressWidth = w * currentProgress
+                    drawRoundRect(
+                        color = RazorTeal,
+                        topLeft = Offset(0f, centerY - 2.dp.toPx()),
+                        size = androidx.compose.ui.geometry.Size(progressWidth, 4.dp.toPx()),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+
+                    // 3. Tiny thumb handle
+                    val thumbRadius = if (isDragging) 6.dp.toPx() else 4.dp.toPx()
+                    val thumbColor = if (isDragging) Color.White else RazorTeal
+                    drawCircle(
+                        color = thumbColor,
+                        radius = thumbRadius,
+                        center = Offset(progressWidth.coerceIn(0f, w), centerY)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Mute button & live timing
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        IconButton(
+                            onClick = onMuteToggle,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isMutedInline) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                                contentDescription = "Mute Inline",
+                                tint = if (isMutedInline) Color.Red else RazorTeal,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        VideoTimerText(progressProvider = progressProvider)
+                    }
+
+                    // Full screen button
+                    if (onFullScreenClick != null) {
+                        Button(
+                            onClick = onFullScreenClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Black.copy(0.5f)),
+                            border = BorderStroke(1.dp, RazorTeal.copy(0.5f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(26.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Launch,
+                                    contentDescription = "Full Screen",
+                                    tint = RazorTeal,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    "Full Screen",
+                                    color = Color.White,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VideoTimerText(progressProvider: () -> Float) {
+    Text(
+        text = "0:${String.format("%02d", (progressProvider() * 12).toInt())} / 0:12",
+        color = Color.White.copy(0.8f),
+        fontSize = 10.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold
+    )
 }
 
 @Composable
@@ -9645,14 +9736,14 @@ fun ReelPlaybackOverlay(
     }
     val isLocked = reel.isPremium && !hasSubscription && reel.creatorId != "pixel_queen"
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.6f)
-                .clip(RoundedCornerShape(24.dp))
-                .border(2.dp, RazorBlue, RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = ObsidianDark)
+                .fillMaxSize()
+                .background(ObsidianDark)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (isLocked) {
@@ -10814,14 +10905,14 @@ fun SnapPlaybackOverlay(
     }
     val isLocked = currentSnap.isPremium && !hasSubscription
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.6f)
-                .clip(RoundedCornerShape(24.dp))
-                .border(2.dp, if (isLocked) InstaPink else RazorTeal, RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = ObsidianDark)
+                .fillMaxSize()
+                .background(ObsidianDark)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (isLocked) {
